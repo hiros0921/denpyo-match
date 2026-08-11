@@ -14,6 +14,14 @@ core.*
 
 # Go
 api/bin/
+# go build ./cmd/xxx が作る実行ファイル（cmd の名前と同じ）
+api/pipetest
+api/dmapi
+api/dmseed
+api/dbtest
+api/ocrcompare
+api/weightsweep
+api/billingtest
 
 # Rails
 # 【重要】master.key は credentials.yml.enc を復号できる鍵。

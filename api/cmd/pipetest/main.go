@@ -37,6 +37,12 @@ func main() {
 	// 作業フォルダはそこに置き、コンテナにも同じ絶対パスで見せる。
 	// 既定を空にして workHost と同じにする。別名で渡す必要はまず無い。
 	workCont := flag.String("workc", "", "コンテナから見た作業フォルダ（既定は -work と同じ）")
+	// エンジンの指定。閾値の根拠を出すには両方の分布が要る。
+	// vision は GOOGLE_VISION_API_KEY が要る（画像が Google に送られる）。
+	engine := flag.String("engine", "tesseract", "tesseract / vision")
+	// 1枚ごとの明細。閾値の分析は集計値では足りない。
+	// 「不正解の最大スコア」「正解の最小スコア」は明細からしか出ない。
+	csvPath := flag.String("csv", "", "1枚ごとの明細をCSVで書き出す先")
 	flag.Parse()
 
 	if *truthDir == "" {
@@ -58,7 +64,27 @@ func main() {
 		*workCont = *workHost
 	}
 	p := pipeline.New(r, *workHost, *workCont)
+	if *engine == "vision" {
+		key := os.Getenv("GOOGLE_VISION_API_KEY")
+		if key == "" {
+			fmt.Fprintln(os.Stderr, "vision には GOOGLE_VISION_API_KEY が要ります")
+			os.Exit(2)
+		}
+		p.Vision = core.NewVision(key, 0.22, r)
+	}
 	th := decide.Default
+
+	var csvF *os.File
+	if *csvPath != "" {
+		f, err := os.Create(*csvPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "CSVを作れません: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		csvF = f
+		fmt.Fprintln(csvF, "name,engine,decision,score,correct,truth_id,top1_id,top1_name,query,cands")
+	}
 	ctx := context.Background()
 
 	var okMatch, total int
@@ -83,7 +109,8 @@ func main() {
 		}
 		total++
 
-		res, err := p.Run(ctx, int64(i+1), filepath.Join(*images, name+".png"), th)
+		res, err := p.RunWith(ctx, int64(i+1), filepath.Join(*images, name+".png"),
+			*engine, pipeline.Issued, th, nil, nil)
 		if err != nil {
 			fmt.Printf("  %-11s ❌ %v\n", name, err)
 			continue
@@ -109,6 +136,25 @@ func main() {
 		byDecision[res.Decision.Decision] = c
 		fmt.Printf("  %-11s %-10s %7.1f %6dms  %s\n",
 			name, res.Decision.Decision, res.Decision.Score, res.TotalMs, got)
+
+		if csvF != nil {
+			var top1ID int64
+			query := ""
+			cands := 0
+			if res.Match != nil {
+				query = res.Match.Query
+				cands = len(res.Match.Results)
+				if cands > 0 {
+					top1ID = res.Match.Results[0].ID
+				}
+			}
+			// 名前にカンマが入ることはまず無いが、入ったら壊れるので落とす。
+			clean := strings.NewReplacer(",", " ", "\n", " ")
+			fmt.Fprintf(csvF, "%s,%s,%s,%.1f,%t,%d,%d,%s,%s,%d\n",
+				name, *engine, res.Decision.Decision, res.Decision.Score,
+				correct, tr.PartnerID, top1ID,
+				clean.Replace(got), clean.Replace(query), cands)
+		}
 	}
 
 	fmt.Println("  " + strings.Repeat("-", 66))
