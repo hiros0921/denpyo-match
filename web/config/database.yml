@@ -1,0 +1,23 @@
+# 既に存在するスキーマに接続する。
+#
+# 【重要】Rails はこのDBの構造を管理しない。
+# 正は db/migrations/*.sql であって、Rails のマイグレーションではない。
+# 同じテーブルを Go と Rails の両方から触るので、片方のフレームワークに
+# 構造の管理を任せると、もう片方から見て「勝手に変わる」ことになる。
+#
+#   やること      db/migrations に SQL を足し、psql で流す
+#   やらないこと  rails generate migration / rails db:migrate
+#
+# したがって `rails db:create` も `rails db:migrate` も実行しない。
+# schema_format は :sql（config/application.rb）。
+default: &default
+  adapter: postgresql
+  encoding: unicode
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
+  url: <%= ENV.fetch("DATABASE_URL") { "postgres://dm:dm_dev_only@postgres:5432/denpo_match" } %>
+
+development:
+  <<: *default
+
+production:
+  <<: *default

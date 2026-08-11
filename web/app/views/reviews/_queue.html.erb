@@ -1,0 +1,34 @@
+<% if rows.empty? %>
+  <p class="lead">ありません。</p>
+<% else %>
+  <table>
+    <thead>
+      <tr>
+        <th>伝票</th><th>顧問先</th><th>読み取った取引先名</th>
+        <th class="num">スコア</th><th>1位の候補</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% rows.each do |r| %>
+        <% d = r.document %>
+        <%# 向きで見る項目が変わる。受領なら発行元、発行なら宛先。 %>
+        <% raw_name = d.partner_field %>
+        <tr>
+          <td><%= link_to d.id, document_path(d) %></td>
+          <td><%= d.client.name %></td>
+          <td class="mono"><%= raw_name&.value_text.presence || "（読み取れず）" %></td>
+          <td class="num"><%= r.score&.to_f&.round(1) %></td>
+          <td><%= r.partner&.name %></td>
+          <td>
+            <% if kind == :review && r.partner %>
+              <%= button_to "承認", decide_document_path(d),
+                    params: { decision: MatchResult::HUMAN_APPROVE, partner_id: r.partner_id },
+                    class: "primary", form: { style: "display:inline" } %>
+            <% end %>
+            <%= link_to "候補を見る", document_path(d), class: "btn" %>
+          </td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>

@@ -1,0 +1,68 @@
+/* 事務所の画面。装飾よりも、数字が読めることを優先する。 */
+:root{
+  --line:#d8dee4; --bg:#f6f8fa; --fg:#1f2328; --muted:#656d76;
+  --auto:#1a7f37; --review:#9a6700; --reject:#cf222e; --accent:#0969da;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;
+     color:var(--fg);background:var(--bg);line-height:1.6}
+main{max-width:1100px;margin:0 auto;padding:24px 20px 64px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+.nav{display:flex;align-items:center;gap:18px;padding:10px 20px;
+     background:#fff;border-bottom:1px solid var(--line)}
+.nav .brand{font-weight:700;letter-spacing:.04em}
+.nav .spacer{flex:1}
+.nav .who{color:var(--muted);font-size:13px}
+.linkish{background:none;border:0;color:var(--accent);cursor:pointer;font-size:14px;padding:0}
+
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:16px;margin:28px 0 10px}
+.lead{color:var(--muted);font-size:13px;margin:0 0 20px}
+
+.flash{padding:10px 14px;border-radius:6px;margin:0 0 16px;font-size:14px}
+.flash.ok{background:#dafbe1;border:1px solid #aceebb}
+.flash.ng{background:#ffebe9;border:1px solid #ffcecb}
+
+.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:18px}
+
+table{width:100%;border-collapse:collapse;background:#fff;font-size:14px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f6f8fa;font-weight:600;font-size:13px;color:var(--muted)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+
+.badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.b-auto{background:#dafbe1;color:var(--auto)}
+.b-review{background:#fff8c5;color:var(--review)}
+.b-reject{background:#ffebe9;color:var(--reject)}
+.b-plain{background:#eaeef2;color:var(--muted)}
+
+.counts{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+.count{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 16px;min-width:110px}
+.count .n{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.count .l{font-size:12px;color:var(--muted)}
+
+.bar{display:flex;height:26px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.bar span{display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:600}
+.bar .s-auto{background:var(--auto)}
+.bar .s-review{background:#bf8700}
+.bar .s-reject{background:var(--reject)}
+
+input[type=range]{width:100%}
+input[type=number],input[type=text],input[type=email],input[type=password],select{
+  padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:14px}
+button,.btn{padding:6px 14px;border:1px solid var(--line);border-radius:6px;
+  background:#fff;cursor:pointer;font-size:14px}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+button.danger{background:#fff;color:var(--reject);border-color:#ffcecb}
+
+.hist{display:flex;align-items:flex-end;gap:3px;height:70px;margin:10px 0 4px}
+.hist i{flex:1;background:#c8d1d9;border-radius:2px 2px 0 0;display:block}
+.hist i.in{background:var(--auto)}
+.histx{display:flex;gap:3px;font-size:10px;color:var(--muted)}
+.histx span{flex:1;text-align:center}
+
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.small{font-size:12px;color:var(--muted)}
+.note{background:#fff8c5;border:1px solid #f0e0a0;border-radius:6px;padding:10px 14px;font-size:13px}

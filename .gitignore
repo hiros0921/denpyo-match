@@ -1,0 +1,35 @@
+# 環境変数（実キーは絶対に置かない）
+.env
+.env.local
+*.local
+
+# C++ ビルド生成物
+core/build/
+# 異常終了したときのコアダンプ。89MB あった。
+core/core
+core.*
+*.o
+*.so
+*.dylib
+
+# Go
+api/bin/
+
+# Rails
+# 【重要】master.key は credentials.yml.enc を復号できる鍵。
+# これが公開されると、暗号化して保存した設定がすべて読める。
+# Rails の作法どおり、enc は追跡し、鍵は追跡しない。
+web/config/master.key
+web/tmp/
+web/log/
+web/storage/
+web/.bundle/
+
+# 生成したテスト帳票（毎回作り直せるので追跡しない）
+testdata/samples/
+
+# OS
+.DS_Store
+
+# 開発中の作業フォルダ。画像と中間ファイルが入る。
+.local/

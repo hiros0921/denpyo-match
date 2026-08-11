@@ -1,0 +1,22 @@
+ja:
+  time:
+    formats:
+      short: "%m/%d %H:%M"
+      default: "%Y年%m月%d日 %H:%M"
+  date:
+    formats:
+      short: "%m/%d"
+      default: "%Y年%m月%d日"
+  activerecord:
+    models:
+      user: 利用者
+      threshold: 閾値設定
+    attributes:
+      user:
+        email: メールアドレス
+        password: パスワード
+        password_confirmation: パスワード（確認）
+        name: 氏名
+      threshold:
+        upper: 自動承認の下限
+        lower: 却下の上限

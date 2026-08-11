@@ -1,0 +1,85 @@
+<h1>監査ログ</h1>
+<p class="lead">
+  訂正・削除の履歴を追記のみのログとして保持しています。
+  この表は UPDATE と DELETE を DB 側で拒否するようにしてあり、
+  アプリのバグや手作業のクエリでは変えられません。
+</p>
+
+<%= render "audit_logs/verification" %>
+
+<%= form_with url: audit_logs_path, method: :get, class: "card" do %>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <div>
+      <label class="small">期間（から）</label><br>
+      <%= date_field_tag :from, params[:from] %>
+    </div>
+    <div>
+      <label class="small">期間（まで）</label><br>
+      <%= date_field_tag :to, params[:to] %>
+    </div>
+    <div>
+      <label class="small">操作</label><br>
+      <%= select_tag :action_name,
+            options_for_select(@actions.map { |a| [AuditLog::ACTION[a] || a, a] },
+                               params[:action_name]),
+            include_blank: "すべて" %>
+    </div>
+    <div>
+      <label class="small">実行者</label><br>
+      <%= select_tag :actor_id,
+            options_from_collection_for_select(@actors, :id, :name, params[:actor_id]),
+            include_blank: "すべて（自動処理を含む）" %>
+    </div>
+    <div>
+      <label class="small">対象</label><br>
+      <%= select_tag :target_table,
+            options_for_select([["伝票の照合結果", "match_results"],
+                                ["覚えた表記", "partner_aliases"]], params[:target_table]),
+            include_blank: "すべて" %>
+    </div>
+    <div>
+      <label class="small">対象ID</label><br>
+      <%= text_field_tag :target_id, params[:target_id], size: 10 %>
+    </div>
+    <div>
+      <%= submit_tag "絞り込む", name: nil, class: "primary" %>
+      <%= link_to "解除", audit_logs_path, class: "btn" %>
+    </div>
+  </div>
+<% end %>
+
+<table>
+  <thead>
+    <tr><th class="num">ID</th><th>日時</th><th>操作</th><th>対象</th>
+        <th>実行者</th><th class="num">閾値設定</th><th>内容</th></tr>
+  </thead>
+  <tbody>
+    <% @result.rows.each do |log| %>
+      <tr>
+        <td class="num"><%= log.id %></td>
+        <td class="small"><%= l log.occurred_at, format: :short rescue log.occurred_at %></td>
+        <td><%= log.action_ja %></td>
+        <td class="mono"><%= log.target_table %> <%= log.target_id %></td>
+        <td><%= log.actor&.name || "（自動処理）" %></td>
+        <td class="num"><%= log.threshold_id %></td>
+        <td class="mono small"><%= log.summary %></td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+
+<% if @result.rows.empty? %>
+  <p class="lead">該当する記録がありません。</p>
+<% end %>
+
+<p class="small mono">
+  <%= @result.rows.size %>件 / 取得 <%= @result.elapsed_ms %>ms
+  <% if @result.next_cursor %>
+    ｜ <%= link_to "次の#{AuditLogQuery::PER_PAGE}件 →",
+                   audit_logs_path(request.query_parameters.merge(cursor: @result.next_cursor)) %>
+  <% end %>
+</p>
+<p class="small">
+  ページ送りに件数の読み飛ばし（OFFSET）を使っていません。
+  監査ログは消えずに増え続けるので、古いところほど遅くなる作りにしていません。
+</p>

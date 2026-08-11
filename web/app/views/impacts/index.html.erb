@@ -1,0 +1,135 @@
+<h1>誤認識の影響範囲</h1>
+<p class="lead">
+  誤りが1件見つかったとき、同じ誤りが他に及んでいないかを調べます。
+  <strong>件数の合計より、そのうち何件が人の目を通らずに確定したかが本質です。</strong>
+</p>
+
+<%= form_with url: impacts_path, method: :get, class: "card" do %>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <div>
+      <label class="small">起点</label><br>
+      <%= select_tag :kind,
+            options_for_select(ImpactQuery::KINDS.map { |k, v| [v, k] }, @kind),
+            id: "kind" %>
+    </div>
+    <div style="flex:1;min-width:280px">
+      <label class="small">対象</label><br>
+      <span id="in-partner" class="kind-in">
+        <%= text_field_tag :value_partner, (@kind == "partner" ? @value : nil),
+              placeholder: "取引先ID（伝票の画面で確認できます）", size: 30 %>
+      </span>
+      <span id="in-alias" class="kind-in">
+        <%= select_tag :value_alias,
+              options_for_select(@aliases.map { |a| ["#{a["alias"]} → #{a["partner"]}", a["alias"]] },
+                                 (@kind == "alias" ? @value : nil)),
+              include_blank: "覚えた表記を選ぶ" %>
+      </span>
+      <span id="in-threshold" class="kind-in">
+        <%= select_tag :value_threshold,
+              options_for_select(@thresholds.map { |t|
+                ["設定#{t.id}（上限#{t.upper.to_f.round(0)} / 下限#{t.lower.to_f.round(0)}・#{t.scope_ja}）", t.id]
+              }, (@kind == "threshold" ? @value : nil)),
+              include_blank: "閾値設定を選ぶ" %>
+      </span>
+    </div>
+    <div>
+      <%= hidden_field_tag :value, @value, id: "value" %>
+      <%= submit_tag "調べる", name: nil, class: "primary" %>
+    </div>
+  </div>
+<% end %>
+
+<% if @summary.nil? %>
+  <p class="lead">起点を選んで「調べる」を押してください。</p>
+<% elsif @summary.total.zero? %>
+  <p class="lead">該当する伝票はありません。<span class="mono small">（<%= @summary.elapsed_ms %>ms）</span></p>
+<% else %>
+  <div class="counts">
+    <div class="count">
+      <div class="n" style="color:var(--reject)"><%= number_with_delimiter(@summary.auto) %></div>
+      <div class="l">自動承認（誰も見ていない）</div>
+    </div>
+    <div class="count">
+      <div class="n"><%= number_with_delimiter(@summary.approved_by_human) %></div>
+      <div class="l">人が承認・修正</div>
+    </div>
+    <div class="count">
+      <div class="n"><%= number_with_delimiter(@summary.review) %></div>
+      <div class="l">要確認（未処理）</div>
+    </div>
+    <div class="count">
+      <div class="n"><%= number_with_delimiter(@summary.reject) %></div>
+      <div class="l">却下</div>
+    </div>
+    <div class="count">
+      <div class="n"><%= number_with_delimiter(@summary.total) %></div>
+      <div class="l">合計</div>
+    </div>
+  </div>
+
+  <% if @summary.auto.positive? %>
+    <div class="note">
+      <strong>自動承認が <%= number_with_delimiter(@summary.auto) %> 件あります。</strong>
+      この分は人の確認を省いて確定しています。誤りが確定していた場合、
+      ここが見直しの対象になります。
+      <% if @summary.first_at %>
+        期間は <%= l Time.zone.parse(@summary.first_at.to_s), format: :default rescue @summary.first_at %>
+        から <%= l Time.zone.parse(@summary.last_at.to_s), format: :default rescue @summary.last_at %> です。
+      <% end %>
+    </div>
+  <% end %>
+
+  <h2>該当する伝票</h2>
+  <table>
+    <thead>
+      <tr><th>伝票</th><th>顧問先</th><th>判定</th><th class="num">スコア</th>
+          <th>取引先</th><th>一致した表記</th><th>確定日時</th></tr>
+    </thead>
+    <tbody>
+      <% @summary.rows.each do |r| %>
+        <tr>
+          <td><%= link_to r["document_id"], document_path(r["document_id"]) %></td>
+          <td><%= r["client_name"] %></td>
+          <td>
+            <% cls = { 1 => "b-auto", 2 => "b-auto", 3 => "b-auto",
+                       4 => "b-reject", 5 => "b-review" }[r["decision"]] %>
+            <span class="badge <%= cls %>"><%= MatchResult::DECISION[r["decision"]] %></span>
+          </td>
+          <td class="num"><%= r["score"]&.to_f&.round(1) %></td>
+          <td><%= r["partner_name"] %></td>
+          <td class="mono small"><%= r["matched_form"] %></td>
+          <td class="small"><%= l r["decided_at"].in_time_zone, format: :short rescue r["decided_at"] %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <p class="small mono">
+    該当 <%= number_with_delimiter(@summary.total) %>件
+    <% if @summary.truncated %>
+      ／ この一覧は先頭<%= ImpactQuery::LIMIT %>件だけです（自動承認から順に並べています）
+    <% end %>
+    ／ <%= @summary.elapsed_ms %>ms
+  </p>
+<% end %>
+
+<script>
+  // 起点によって入力欄を切り替える。
+  // 3つとも常に出すと、どれを埋めればよいのか分からない。
+  (function () {
+    const kind = document.getElementById("kind");
+    const value = document.getElementById("value");
+    const map = { partner: "value_partner", alias: "value_alias", threshold: "value_threshold" };
+    function sync() {
+      document.querySelectorAll(".kind-in").forEach(function (el) { el.style.display = "none"; });
+      const box = document.getElementById("in-" + kind.value);
+      if (box) box.style.display = "";
+      const src = document.getElementsByName(map[kind.value])[0];
+      // 送るのは value 1つだけにする。起点ごとに別のパラメータ名で送ると、
+      // 受け取る側が「どれを見ればよいか」を判断する分岐を持つことになる。
+      if (src) { value.value = src.value; src.addEventListener("input", function () { value.value = src.value; });
+                 src.addEventListener("change", function () { value.value = src.value; }); }
+    }
+    kind.addEventListener("change", sync);
+    sync();
+  })();
+</script>

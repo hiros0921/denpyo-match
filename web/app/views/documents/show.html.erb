@@ -1,0 +1,157 @@
+<h1>伝票 <%= @document.id %></h1>
+<p class="lead">
+  <%= @document.client.name %> ／ <%= @document.doc_type_ja %> ／
+  <%= @document.direction_ja %> ／
+  状態 <%= @document.status_ja %>
+</p>
+
+<% if @document.source_ja %>
+  <p class="small">
+    元のファイル: <%= @document.source_ja %>
+    <% sib = @document.siblings.limit(30) %>
+    <% if sib.any? %>
+      ／ 同じファイルから
+      <%= sib.map { |d| link_to d.id, document_path(d) }.join("、").html_safe %>
+    <% end %>
+  </p>
+<% end %>
+
+<% if @job&.running? %>
+  <div class="card">
+    <strong>処理中</strong>
+    <span class="badge b-plain"><%= @job.stage_ja || "順番待ち" %></span>
+    <div class="bar" style="margin-top:8px">
+      <span class="s-auto" style="width:<%= @job.progress %>%"><%= @job.progress %>%</span>
+    </div>
+    <p class="small">
+      この画面を再読み込みすると進みます。
+      進捗はワーカーに問い合わせず、DBに書かれたものを読んでいます。
+    </p>
+  </div>
+<% elsif @job&.status == 4 %>
+  <div class="card">
+    <strong style="color:var(--reject)">処理に失敗しました</strong>
+    <p class="mono"><%= @job.last_error %></p>
+    <p class="small"><%= @job.attempts %>回試して打ち切りました。</p>
+  </div>
+<% end %>
+
+<h2>読み取った内容</h2>
+<table>
+  <thead><tr><th>項目</th><th>値</th><th class="num">抽出の信頼度</th></tr></thead>
+  <tbody>
+    <%# partner_name は recipient_name と同じ値なので出さない。
+        同じ値が2行並ぶと、どちらを照合したのか分からなくなる。 %>
+    <% @fields.reject { |f| f.field_key == "partner_name" }.each do |f| %>
+      <tr>
+        <td>
+          <%= f.label %>
+          <% if f.field_key == @document.partner_field_key %>
+            <span class="badge b-plain">照合に使用</span>
+          <% end %>
+        </td>
+        <td><%= f.value_text.presence || "（読み取れず）" %></td>
+        <td class="num"><%= f.confidence_pct.round(0) %>%</td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+<p class="small">
+  抽出の信頼度では正誤を分けられません（実測: 正解の平均0.53 / 不正解0.49）。
+  参考として出しているだけで、判定には使っていません。判定は下の照合スコアで行います。
+</p>
+
+<% if @reg %>
+  <h2>インボイス登録番号</h2>
+  <div class="card">
+    <p>
+      <span class="mono"><%= @reg["reg_no"].presence || "（記載なし）" %></span>
+      <strong><%= InvoiceRegQuery.label(@reg["status"]) %></strong>
+    </p>
+    <p class="small"><%= @reg["why"] %></p>
+  </div>
+<% end %>
+
+<% if @result %>
+  <h2>判定</h2>
+  <div class="card">
+    <p>
+      <%= render "documents/decision_badge", result: @result %>
+      <% if @result.partner %>
+        <strong><%= @result.partner.name %></strong>
+      <% end %>
+      <% if @result.score %>
+        <span class="mono">照合スコア <%= @result.score.to_f.round(1) %></span>
+      <% end %>
+    </p>
+    <% if @result.decision == MatchResult::AUTO_APPROVE %>
+      <p class="small">
+        閾値設定 <%= @result.threshold_id %> にもとづき、人の確認なしで確定しました。
+        <%= link_to "この設定を見る", thresholds_path %>
+      </p>
+    <% end %>
+    <% if @result.decided_by %>
+      <p class="small">
+        <%= @result.decided_by.name %> が
+        <%= l @result.decided_at, format: :short rescue @result.decided_at %> に判断
+      </p>
+    <% end %>
+  </div>
+<% end %>
+
+<h2>照合の候補</h2>
+<% if @candidates.any? %>
+  <table>
+    <thead>
+      <tr><th class="num">順位</th><th>取引先</th><th class="num">スコア</th>
+          <th class="num">編集距離</th><th class="num">n-gram</th><th class="num">先頭一致</th><th></th></tr>
+    </thead>
+    <tbody>
+      <% @candidates.each do |c| %>
+        <tr>
+          <td class="num"><%= c.rank %></td>
+          <td><%= c.partner.name %></td>
+          <td class="num"><strong><%= c.score.to_f.round(1) %></strong></td>
+          <td class="num"><%= c.score_detail&.dig("levenshtein")&.round(3) %></td>
+          <td class="num"><%= c.score_detail&.dig("jaccard")&.round(3) %></td>
+          <td class="num"><%= c.score_detail&.dig("prefix")&.round(3) %></td>
+          <td>
+            <% if @result && [MatchResult::NEEDS_REVIEW, MatchResult::REJECT].include?(@result.decision) %>
+              <%= button_to "これにする", decide_document_path(@document),
+                    params: { decision: MatchResult::HUMAN_UPDATE, partner_id: c.partner_id,
+                              learn_alias: @document.partner_field&.value_text },
+                    form: { style: "display:inline" } %>
+            <% end %>
+          </td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <p class="small">
+    候補は pg_trgm で50件まで絞り、C++ が編集距離・n-gram類似度・先頭一致で採点しています。
+    重みは 0.5 / 0.3 / 0.2。日本語の企業名は末尾（運輸・建設・商事）で識別されるため、
+    先頭一致の重みを低くしてあります。
+  </p>
+<% else %>
+  <p class="lead">候補がありません。取引先名を読み取れなかった伝票です。</p>
+<% end %>
+
+<% if @result && [MatchResult::NEEDS_REVIEW, MatchResult::REJECT].include?(@result.decision) %>
+  <h2>この伝票をどうするか</h2>
+  <div class="card">
+    <% if @result.partner %>
+      <%= button_to "1位のまま承認（#{@result.partner.name}）", decide_document_path(@document),
+            params: { decision: MatchResult::HUMAN_APPROVE, partner_id: @result.partner_id },
+            class: "primary", form: { style: "display:inline-block;margin-right:8px" } %>
+    <% end %>
+    <%= button_to "却下（画像を見て手で入れる）", decide_document_path(@document),
+          params: { decision: MatchResult::REJECT },
+          class: "danger", form: { style: "display:inline-block" } %>
+    <p class="small">
+      「これにする」で選び直すと、この伝票に書かれていた表記を
+      別名として登録します。次から同じ表記が来たときに候補へ上がります。
+    </p>
+  </div>
+<% end %>
+
+<p><%= link_to "← 伝票一覧", documents_path %></p>

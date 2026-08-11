@@ -1,0 +1,21 @@
+<%# 猶予期間と停止中は、どの画面にいても見えるようにする。
+    契約の画面を開いたときだけ分かる作りだと、気付くのが遅れて14日を使い切る。 %>
+<% b = billing_status %>
+<% if b && b["configured"] %>
+  <% if b["in_grace"] %>
+    <div class="note" style="margin-bottom:16px">
+      <strong>お支払いを確認できていません。</strong>
+      <%= l Time.zone.parse(b["grace_until"]), format: :default rescue b["grace_until"] %>
+      までは今までどおりご利用いただけます。
+      <%= link_to "お支払い方法を確認する", billing_path %>
+    </div>
+  <% elsif !b["can_upload"] %>
+    <div class="flash ng" style="margin-bottom:16px">
+      <strong>新しい伝票のアップロードを停止しています。</strong>
+      <%= b["reason"] %>。
+      <%= link_to "ご契約の確認", billing_path %>
+      <br>
+      <span class="small">過去の伝票と監査ログは、これまでどおりご覧いただけます。</span>
+    </div>
+  <% end %>
+<% end %>

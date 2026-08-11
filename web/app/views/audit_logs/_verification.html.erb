@@ -1,0 +1,40 @@
+<div class="card">
+  <% if @verify[:errors].empty? %>
+    <strong style="color:var(--auto)">
+      ハッシュ連鎖の検証：異常なし
+      （<%= @verified_all ? "全件" : "表示中の#{@result.rows.size}件" %> ／ <%= @verify[:elapsed_ms] %>ms）
+    </strong>
+    <p class="small">
+      各行は「直前の行のハッシュ」と「その行の中身」の両方からハッシュを作っています。
+      検証では中身から計算し直して突き合わせるので、
+      <strong>行の内容だけを書き換えても検知できます。</strong>
+      防止ではなく検知の仕組みです。
+    </p>
+  <% else %>
+    <strong style="color:var(--reject)">
+      ハッシュ連鎖に異常があります（<%= @verify[:errors].size %>件）
+    </strong>
+    <table style="margin-top:10px">
+      <thead><tr><th class="num">ID</th><th>内容</th></tr></thead>
+      <tbody>
+        <% @verify[:errors].each do |e| %>
+          <tr><td class="num"><%= e["bad_id"] %></td><td><%= e["reason"] %></td></tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+
+  <p style="margin-top:10px">
+    <% unless @verified_all %>
+      <%= link_to "すべて検証する", audit_logs_path(request.query_parameters.merge(verify_all: 1)),
+                  class: "btn" %>
+      <span class="small">
+        件数に比例して時間がかかります（実測 5万件で24ms）。
+        画面を開くたびには走らせていません。
+      </span>
+    <% else %>
+      <%= link_to "表示中の範囲だけに戻す",
+                  audit_logs_path(request.query_parameters.except("verify_all")), class: "btn" %>
+    <% end %>
+  </p>
+</div>

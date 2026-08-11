@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <title>DENPYO MATCH</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+    <%= stylesheet_link_tag "application" %>
+    <%= javascript_importmap_tags %>
+  </head>
+  <body>
+    <% if user_signed_in? %>
+      <nav class="nav">
+        <span class="brand">DENPYO MATCH</span>
+        <%= link_to "伝票", documents_path %>
+        <%= link_to "承認キュー", reviews_path %>
+        <%= link_to "閾値", thresholds_path %>
+        <%= link_to "登録番号", invoice_regs_path %>
+        <%= link_to "覚えた表記", learned_aliases_path %>
+        <%= link_to "影響範囲", impacts_path %>
+        <%= link_to "ご契約", billing_path %>
+        <%= link_to "監査ログ", audit_logs_path %>
+        <span class="spacer"></span>
+        <span class="who"><%= current_user.name %>（<%= current_organization.name %>）</span>
+        <%= button_to "ログアウト", destroy_user_session_path, method: :delete, class: "linkish" %>
+      </nav>
+    <% end %>
+
+    <main>
+      <% if notice %><p class="flash ok"><%= notice %></p><% end %>
+      <% if alert %><p class="flash ng"><%= alert %></p><% end %>
+      <%# ログイン前は組織が決まらない。帯を出す相手がいない %>
+      <% if user_signed_in? %><%= render "shared/billing_banner" %><% end %>
+      <%= yield %>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+<% if result.nil? %>
+  <span class="badge b-plain">未処理</span>
+<% else %>
+  <% cls = case result.decision
+           when 1, 2 then "b-auto"
+           when 5    then "b-review"
+           when 4    then "b-reject"
+           else           "b-plain"
+           end %>
+  <span class="badge <%= cls %>"><%= result.decision_ja %></span>
+<% end %>

@@ -1,0 +1,52 @@
+<h1>伝票</h1>
+<p class="lead">アップロードされた伝票と、その処理状況。</p>
+
+<div class="counts">
+  <% [[1,"受付"],[4,"照合済"],[5,"確定"],[9,"エラー"]].each do |code, label| %>
+    <div class="count">
+      <div class="n"><%= number_with_delimiter(@counts[code] || 0) %></div>
+      <div class="l"><%= label %></div>
+    </div>
+  <% end %>
+</div>
+
+<%= form_with url: documents_path, method: :get, class: "card" do %>
+  <%= select_tag :client_id,
+        options_from_collection_for_select(accessible_clients, :id, :name, @client_id),
+        include_blank: "すべての顧問先" %>
+  <%= submit_tag "絞り込む", name: nil %>
+  <%= link_to "伝票を追加", new_document_path, class: "btn" %>
+<% end %>
+
+<table>
+  <thead>
+    <tr>
+      <th>伝票</th><th>顧問先</th><th>種別</th><th>状態</th>
+      <th>判定</th><th class="num">スコア</th><th>取引先</th><th>受付</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% @documents.each do |d| %>
+      <tr>
+        <td><%= link_to d.id, document_path(d) %></td>
+        <td><%= d.client.name %></td>
+        <td><%= d.doc_type_ja %></td>
+        <td>
+          <% job = d.jobs.max_by(&:id) %>
+          <% if job&.running? %>
+            <span class="badge b-plain"><%= job.stage_ja || "待機" %> <%= job.progress %>%</span>
+          <% else %>
+            <%= d.status_ja %>
+          <% end %>
+        </td>
+        <td><%= render "documents/decision_badge", result: d.match_result %></td>
+        <td class="num"><%= d.match_result&.score&.to_f&.round(1) %></td>
+        <td><%= d.match_result&.partner&.name %></td>
+        <td class="small"><%= l d.uploaded_at, format: :short rescue d.uploaded_at %></td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+<% if @documents.empty? %>
+  <p class="lead">まだ伝票がありません。<%= link_to "追加する", new_document_path %></p>
+<% end %>

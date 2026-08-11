@@ -1,0 +1,47 @@
+<h1>伝票を追加</h1>
+<p class="lead">
+  受け付けたらすぐ画面が戻ります。処理の完了は待ちません。
+  1枚あたり約1.4秒かかるので、まとめて入れたときに待たせないためです。
+</p>
+
+<% b = billing_status %>
+<% blocked = b && b["configured"] && !b["can_upload"] %>
+
+<%= form_with url: documents_path, method: :post, multipart: true, class: "card" do %>
+  <p>
+    <label>顧問先</label><br>
+    <%= select_tag :client_id,
+          options_from_collection_for_select(@clients, :id, ->(c){ "#{c.name}（#{c.engine_ja}）" }) %>
+  </p>
+  <p>
+    <label>帳票の種別</label><br>
+    <%= select_tag :doc_type, options_for_select([["請求書",1],["納品書",2],["領収書",3]]) %>
+  </p>
+  <p>
+    <%# 向きで照合する相手が逆になる。
+        受領なら発行元、発行なら宛先。間違えると、宛先＝自社を
+        照合し続けることになり、画面上は「スコアが低い」としか見えない。
+        既定は顧問先の設定に従う（空で送る）。 %>
+    <label>受け取ったもの / 出したもの</label><br>
+    <%= select_tag :direction,
+          options_for_select([["顧問先の設定に従う", ""],
+                              ["受領（相手は発行元）", 1],
+                              ["発行（相手は宛先）", 2]]) %>
+    <span class="small">受領なら発行元、発行なら宛先を取引先として照合します</span>
+  </p>
+  <p>
+    <label>画像</label><br>
+    <%= file_field_tag :file, accept: "image/png,image/jpeg,image/tiff,application/pdf" %>
+    <span class="small">png / jpg / tiff / pdf・20MBまで</span>
+  </p>
+  <% if blocked %>
+    <%# 押せない理由を、押す前に示す。押してから断られる作りにしない。
+        なお止めているのは API 側なので、この表示を消しても通らない。 %>
+    <%= submit_tag "アップロード", class: "primary", disabled: true %>
+    <span class="small" style="color:var(--reject)">
+      <%= b["reason"] %>。<%= link_to "ご契約の確認", billing_path %>
+    </span>
+  <% else %>
+    <%= submit_tag "アップロード", class: "primary" %>
+  <% end %>
+<% end %>

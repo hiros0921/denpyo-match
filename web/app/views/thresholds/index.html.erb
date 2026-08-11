@@ -1,0 +1,106 @@
+<h1>閾値シミュレーション</h1>
+<p class="lead">
+  「どの精度なら人の確認を省いてよいか」を、決める前に見られるようにしています。
+  スライダーを動かしても照合はやり直しません。保存済みのスコアを集計しているだけです。
+</p>
+
+<div class="card">
+  <%= form_with url: thresholds_path, method: :get, id: "sim-form", local: true do %>
+    <p>
+      <label>対象</label>
+      <%= select_tag :client_id,
+            options_from_collection_for_select(@clients, :id, :name, @client_id),
+            include_blank: "組織全体" %>
+      <%= submit_tag "この範囲で見る", name: nil %>
+    </p>
+  <% end %>
+
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+    <div style="flex:1;min-width:260px">
+      <label>自動承認の下限（これ以上なら人が見ない） <b id="upper-v"><%= @upper.round(0) %></b></label>
+      <input type="range" id="upper" min="0" max="100" step="1" value="<%= @upper.round(0) %>">
+    </div>
+    <div style="flex:1;min-width:260px">
+      <label>却下の上限（これ未満なら手入力へ回す） <b id="lower-v"><%= @lower.round(0) %></b></label>
+      <input type="range" id="lower" min="0" max="100" step="1" value="<%= @lower.round(0) %>">
+    </div>
+  </div>
+
+  <div id="sim-result" style="margin-top:18px">
+    <%= render "thresholds/result", result: @result, upper: @upper, lower: @lower %>
+  </div>
+
+  <% if current_user.can_edit_threshold? %>
+    <%= form_with url: thresholds_path, method: :post, id: "apply-form",
+                  style: "margin-top:18px;border-top:1px solid var(--line);padding-top:16px" do %>
+      <%= hidden_field_tag :client_id, @client_id %>
+      <%= hidden_field_tag :upper, @upper, id: "apply-upper" %>
+      <%= hidden_field_tag :lower, @lower, id: "apply-lower" %>
+      <%= submit_tag "この設定を適用する", class: "primary" %>
+      <span class="small">
+        前の設定は消しません。履歴として残ります。
+        「この伝票はどの設定で自動承認されたか」を後から辿れるようにするためです。
+      </span>
+    <% end %>
+  <% else %>
+    <p class="note">
+      閾値を変えられるのは管理者だけです。
+      どの精度なら人の確認を省いてよいかは事務所の責任の線引きなので、
+      担当者が手元で下げられる設定にしていません。
+    </p>
+  <% end %>
+</div>
+
+<h2>いま適用されている設定</h2>
+<table>
+  <thead><tr><th>範囲</th><th>帳票種別</th><th class="num">上限</th><th class="num">下限</th><th>適用開始</th></tr></thead>
+  <tbody>
+    <% @current.each do |t| %>
+      <tr>
+        <td><%= t.scope_ja %></td>
+        <td><%= t.doc_type ? Document::DOC_TYPE[t.doc_type] : "全種別" %></td>
+        <td class="num"><%= t.upper.to_f.round(1) %></td>
+        <td class="num"><%= t.lower.to_f.round(1) %></td>
+        <td class="small"><%= l t.valid_from, format: :short rescue t.valid_from %></td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+<p class="small">
+  適用の優先順位は 取引先 &gt; 顧問先 &gt; 組織。帳票種別の一致を優先します。
+</p>
+
+<script>
+  // スライダーを動かすたびに集計だけを取りに行く。
+  // 照合はやり直さないので、1万件でも十数ミリ秒で返る。
+  (function () {
+    const upper = document.getElementById("upper");
+    const lower = document.getElementById("lower");
+    const box   = document.getElementById("sim-result");
+    const clientSel = document.querySelector("#sim-form select");
+    let timer = null;
+
+    function refresh() {
+      // 下限が上限を超えないようにする。逆転した設定はDBの制約でも弾かれるが、
+      // 画面で作れてしまうと「押したら怒られる」体験になる。
+      if (Number(lower.value) > Number(upper.value)) lower.value = upper.value;
+      document.getElementById("upper-v").textContent = upper.value;
+      document.getElementById("lower-v").textContent = lower.value;
+      const au = document.getElementById("apply-upper");
+      const al = document.getElementById("apply-lower");
+      if (au) { au.value = upper.value; al.value = lower.value; }
+
+      const p = new URLSearchParams({ upper: upper.value, lower: lower.value });
+      if (clientSel && clientSel.value) p.set("client_id", clientSel.value);
+      clearTimeout(timer);
+      // 連続で動かしたときに毎回投げない。指を止めてから取りに行く。
+      timer = setTimeout(function () {
+        fetch("<%= simulate_thresholds_path %>?" + p.toString(), {
+          headers: { "Accept": "text/html" }
+        }).then(r => r.text()).then(html => { box.innerHTML = html; });
+      }, 120);
+    }
+    upper.addEventListener("input", refresh);
+    lower.addEventListener("input", refresh);
+  })();
+</script>

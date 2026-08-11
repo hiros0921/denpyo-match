@@ -1,0 +1,99 @@
+<h1>ご契約</h1>
+
+<% if @done %>
+  <p class="flash ok">
+    お手続きありがとうございました。反映まで少し時間がかかることがあります。
+    この画面を再読み込みしてご確認ください。
+  </p>
+<% elsif @canceled %>
+  <p class="flash ng">お手続きを中断しました。課金は発生していません。</p>
+<% end %>
+
+<% if @billing.nil? %>
+  <div class="card">
+    <strong style="color:var(--reject)">契約の状態を確認できません</strong>
+    <p class="small">
+      処理サーバーに繋がりませんでした。伝票の処理は続いています
+      （確認できないことを理由に業務を止めない作りにしてあります）。
+    </p>
+  </div>
+<% elsif !@billing["configured"] %>
+  <div class="note">
+    <strong>決済が設定されていません。</strong>
+    このシステムでは課金の手続きができない状態です。管理者にお問い合わせください。
+  </div>
+<% else %>
+  <div class="card">
+    <p style="font-size:16px;margin:0 0 8px">
+      <% if @billing["can_upload"] %>
+        <span class="badge b-auto">ご利用いただけます</span>
+      <% else %>
+        <span class="badge b-reject">アップロードを停止中</span>
+      <% end %>
+      <% if @billing["status"] %>
+        <span class="mono small" style="margin-left:8px">
+          Stripe の状態: <%= @billing["status"] %>
+        </span>
+      <% end %>
+    </p>
+
+    <% if @billing["reason"].present? %>
+      <p><%= @billing["reason"] %></p>
+    <% end %>
+    <% if @billing["next_step"].present? %>
+      <p class="small"><%= @billing["next_step"] %></p>
+    <% end %>
+
+    <% if @billing["current_period_end"].present? %>
+      <p class="small">
+        今回のご利用期間は
+        <%= l Time.zone.parse(@billing["current_period_end"]), format: :default rescue @billing["current_period_end"] %>
+        までです。
+      </p>
+    <% end %>
+
+    <p style="margin-top:16px">
+      <% if current_user.can_manage_billing? %>
+        <% if @billing["has_contract"] %>
+          <%# turbo: false が要る。Turbo は外部サイトへの302を追わないので、
+              付けないと「押しても何も起きない」ように見える（実際に踏んだ）。
+              サーバー側は正しくリダイレクトを返している。 %>
+          <%= button_to "お支払い方法の変更・解約", portal_billing_path, class: "primary",
+                form: { style: "display:inline-block;margin-right:8px",
+                        data: { turbo: false } } %>
+        <% else %>
+          <%= button_to "お申し込みへ進む", checkout_billing_path, class: "primary",
+                form: { style: "display:inline-block;margin-right:8px",
+                        data: { turbo: false } } %>
+        <% end %>
+        <span class="small">カード情報の入力は Stripe の画面で行います。</span>
+      <% else %>
+        <span class="small">
+          契約の手続きができるのは管理者だけです。
+          支払い方法の変更や解約は事務所の意思決定なので、
+          担当者が自分の判断で行える設定にしていません。
+        </span>
+      <% end %>
+    </p>
+  </div>
+
+  <h2>契約が切れると何が起きるか</h2>
+  <table>
+    <thead><tr><th>できること</th><th>契約中</th><th>猶予期間</th><th>停止後</th></tr></thead>
+    <tbody>
+      <tr><td>新しい伝票のアップロード</td><td>○</td><td>○</td><td><strong>×</strong></td></tr>
+      <tr><td>過去の伝票を見る</td><td>○</td><td>○</td><td>○</td></tr>
+      <tr><td>承認・修正</td><td>○</td><td>○</td><td>○</td></tr>
+      <tr><td>監査ログを見る</td><td>○</td><td>○</td><td>○</td></tr>
+    </tbody>
+  </table>
+  <p class="small">
+    過去の伝票と監査ログは、契約が切れても見られます。
+    会計事務所は顧問先の帳簿を預かる仕事なので、
+    解約後に税務調査が来たときに何も出せない状態にはしていません。
+  </p>
+  <p class="small">
+    お支払いを確認できなかった場合も、<strong>14日間</strong>は今までどおりご利用いただけます。
+    カードの有効期限切れなどで、その日のうちに業務が止まらないようにするためです。
+  </p>
+<% end %>

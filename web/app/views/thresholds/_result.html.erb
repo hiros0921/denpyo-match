@@ -1,0 +1,53 @@
+<div class="bar">
+  <% if result.total.zero? %>
+    <span class="s-reject" style="width:100%">集計できる伝票がありません</span>
+  <% else %>
+    <% if result.auto.positive? %>
+      <span class="s-auto" style="width:<%= result.auto_pct %>%"><%= result.auto_pct %>%</span>
+    <% end %>
+    <% if result.review.positive? %>
+      <span class="s-review" style="width:<%= result.review_pct %>%"><%= result.review_pct %>%</span>
+    <% end %>
+    <% if result.reject.positive? %>
+      <span class="s-reject" style="width:<%= result.reject_pct %>%"><%= result.reject_pct %>%</span>
+    <% end %>
+  <% end %>
+</div>
+
+<div class="counts" style="margin-top:14px">
+  <div class="count">
+    <div class="n" style="color:var(--auto)"><%= number_with_delimiter(result.auto) %></div>
+    <div class="l">自動承認（人が見ない）</div>
+  </div>
+  <div class="count">
+    <div class="n" style="color:var(--review)"><%= number_with_delimiter(result.review) %></div>
+    <div class="l">要確認（人が見る）</div>
+  </div>
+  <div class="count">
+    <div class="n" style="color:var(--reject)"><%= number_with_delimiter(result.reject) %></div>
+    <div class="l">却下（手で入れる）</div>
+  </div>
+  <div class="count">
+    <div class="n"><%= number_with_delimiter(result.total) %></div>
+    <div class="l">集計した伝票</div>
+  </div>
+</div>
+
+<h2 style="margin-top:8px">照合スコアの分布</h2>
+<div class="hist">
+  <% mx = [result.distribution.max, 1].max %>
+  <% result.distribution.each_with_index do |n, i| %>
+    <%# 帯の下端が上限以上なら「自動承認に入る」。閾値を動かすと色が動く。
+        分布だけ見せても、閾値をどこへ置くと何が変わるかは読み取れない。 %>
+    <i class="<%= "in" if i * 10 >= upper %>" style="height:<%= (n * 100.0 / mx).round(1) %>%"
+       title="<%= i*10 %>〜<%= i*10+9 %>: <%= n %>件"></i>
+  <% end %>
+</div>
+<div class="histx">
+  <% 10.times { |i| %><span><%= i * 10 %></span><% } %>
+</div>
+<p class="small">
+  件数だけでは、閾値をどこへ動かせばよいか分かりません。
+  スコアがどこに固まっているかが見えて初めて、下げる意味があるかを判断できます。
+</p>
+<p class="small mono">集計 <%= result.elapsed_ms %>ms（照合はやり直していません）</p>

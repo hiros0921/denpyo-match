@@ -1,0 +1,36 @@
+<h1>覚えた表記</h1>
+<p class="lead">
+  承認画面で人が「これにする」を押したときに覚えた表記です。
+  次から同じ表記が来たときに候補へ上がり、採点でも使われます。
+</p>
+
+<div class="note">
+  <strong>この仕組みは逆にも同じだけ効きます。</strong>
+  誤って覚えると、その取引先はずっと当たらなくなります。実測では、
+  誤った組み合わせを1件登録しただけで、正しい取引先が同点で2位に落ちました。
+  押し間違いに気づいたら、ここで取り消してください。
+</div>
+
+<table style="margin-top:16px">
+  <thead>
+    <tr><th>覚えた表記</th><th>正規形</th><th>取引先</th><th>覚えた日時</th><th></th></tr>
+  </thead>
+  <tbody>
+    <% @aliases.each do |a| %>
+      <tr>
+        <td class="mono"><%= a["alias"] %></td>
+        <td class="mono small"><%= a["norm"] %></td>
+        <td><%= a["partner"] %></td>
+        <td class="small"><%= l Time.zone.parse(a["created_at"]), format: :short rescue a["created_at"] %></td>
+        <td>
+          <%= button_to "取り消す", learned_alias_path(a["id"]), method: :delete,
+                class: "danger",
+                form: { data: { turbo_confirm: "「#{a["alias"]}」を #{a["partner"]} として覚えたことを取り消します。よろしいですか？" } } %>
+        </td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+<% if @aliases.empty? %>
+  <p class="lead">まだありません。承認画面で候補を選び直すと貯まります。</p>
+<% end %>

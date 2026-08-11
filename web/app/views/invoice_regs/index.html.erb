@@ -1,0 +1,100 @@
+<h1>インボイス登録番号の照合</h1>
+<p class="lead">
+  受け取った帳票に「T＋13桁」の登録番号が正しく載っているかを、全件機械で確かめます。
+  番号が無効だと仕入税額控除が取れないため、実務では全件を手で確認しています。
+</p>
+
+<%# 状態ごとの件数。絞り込む前に全体の姿を出す。
+    「問題は3件です」だけだと、母数が30件なのか3,000件なのか分からない。 %>
+<div class="card">
+  <table>
+    <thead><tr><th>状態</th><th class="num">件数</th></tr></thead>
+    <tbody>
+      <% [InvoiceRegQuery::REGISTERED, InvoiceRegQuery::FORMAT_OK,
+          InvoiceRegQuery::MISSING, InvoiceRegQuery::BAD_FORMAT,
+          InvoiceRegQuery::BAD_CHECK, InvoiceRegQuery::NOT_FOUND].each do |st| %>
+        <tr>
+          <td>
+            <%= link_to InvoiceRegQuery.label(st),
+                  invoice_regs_path(client_id: @client_id, only: st) %>
+          </td>
+          <td class="num"><%= @counts[st] || 0 %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <p class="small">
+    <%= link_to "問題があるものだけ", invoice_regs_path(client_id: @client_id, only: "attention") %>
+    ／
+    <%= link_to "すべて", invoice_regs_path(client_id: @client_id, only: "all") %>
+  </p>
+</div>
+
+<% if @conflicts.any? %>
+  <h2>同じ番号が別の取引先で使われています</h2>
+  <p class="small">
+    1つの登録番号が複数の取引先名で出ています。書き写し間違いはこの形で現れます。
+    1件ずつ見ても気付けないので、番号を軸に並べています。
+  </p>
+  <table>
+    <thead><tr><th>登録番号</th><th>出てきた取引先名</th><th class="num">伝票</th></tr></thead>
+    <tbody>
+      <% @conflicts.each do |c| %>
+        <tr>
+          <td class="mono"><%= c["reg_no"] %></td>
+          <td><%= c["name_list"] %></td>
+          <td class="num"><%= c["docs"] %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>
+
+<h2>
+  一覧
+  <span class="small">
+    該当 <%= @total %> 件<% if @total > InvoiceRegQuery::LIMIT %>（先頭 <%= InvoiceRegQuery::LIMIT %> 件を表示）<% end %>
+  </span>
+</h2>
+
+<% if @rows.empty? %>
+  <p>該当する伝票はありません。</p>
+<% else %>
+  <table>
+    <thead>
+      <tr>
+        <th>伝票</th><th>顧問先</th><th>取引先</th>
+        <th>登録番号</th><th>状態</th><th>理由</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% @rows.each do |r| %>
+        <tr>
+          <td>
+            <%= link_to r["document_id"], document_path(r["document_id"]) %>
+            <% if r["source_name"].present? %>
+              <br><span class="small"><%= r["source_name"] %>
+                <%= r["source_page"] %>-<%= r["source_region"] %></span>
+            <% end %>
+          </td>
+          <td><%= r["client_name"] %></td>
+          <td><%= r["partner_text"].presence || "（読み取れず）" %></td>
+          <td class="mono"><%= r["reg_no"].presence || "—" %></td>
+          <td><%= InvoiceRegQuery.label(r["status"]) %></td>
+          <td class="small"><%= r["why"] %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>
+
+<p class="small">
+  <%# 効かせすぎないための注記。ここを黙っていると、
+      「機械が全部見た」と受け取られる。実際には形式の検査までしか
+      していない状態がありうる。 %>
+  「形式は正しい（実在は未確認）」は、桁数と検査数字だけを見た状態です。
+  実在の確認には国税庁の公表システムへの問い合わせが必要で、
+  利用申請で発行されるアプリケーションIDを設定すると有効になります。
+  なお検査数字は 0 と 9 の取り違えを見抜けないため、形式検査だけで
+  「全件照合しました」とは言えません。
+</p>

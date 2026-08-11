@@ -1,0 +1,126 @@
+# 開発環境。環境差異を潰すためにすべてコンテナで動かす。
+#
+# 今日の段階で起動するのは postgres と minio だけ。
+# core / api / web は定義だけ置き、各段階の着手時にビルドする。
+# C++ のビルドは時間が読めないため、先に走らせて他を止めない。
+#
+#   docker compose up -d postgres minio     … 今日使うぶんだけ起動
+#   docker compose --profile app up -d      … 第6段階以降、全部起動
+#
+# 実キーは .env から読む。.env はリポジトリに置かない（.env.example のみ）。
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: dm_postgres
+    environment:
+      POSTGRES_DB: denpo_match
+      POSTGRES_USER: ${POSTGRES_USER:-dm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dm_dev_only}
+      # 照合順序（COLLATE）と文字種判定（CTYPE）を分けて指定する。
+      #
+      #   COLLATE = C       並び順をロケールに依存させない（当初からの方針）
+      #   CTYPE   = C.utf8  文字が「文字かどうか」の判定を UTF-8 で行う
+      #
+      # 【重要】ここを両方 C にしてはいけない。
+      # pg_trgm は文字種判定を使って、英数字以外を捨ててから3文字組を作る。
+      # CTYPE が C だと、日本語が「文字ではない」と判定されて全部捨てられる。
+      # 実測（第6段階で踏んだ）:
+      #   CTYPE=C     show_trgm('シラカワ商事') → {}   similarity(同一文字列) = 0
+      #   CTYPE=C.utf8 show_trgm('シラカワ商事') → 7個  similarity(同一文字列) = 1
+      # 候補生成が常に0件になるが、エラーは一切出ない。
+      # 「速いが何も当たらない」状態になり、速度だけ測ると正常に見える。
+      POSTGRES_INITDB_ARGS: "--lc-collate=C --lc-ctype=C.utf8 --encoding=UTF8"
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 初回起動時に自動実行される。pg_trgm の有効化と権限設定。
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dm} -d denpo_match"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # R2 互換のローカルストレージ。本番は Cloudflare R2 に差し替える。
+  # 画像本体はDBに入れず、ここに置いてキーだけをDBが持つ。
+  minio:
+    image: minio/minio:latest
+    container_name: dm_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-dm_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-dm_minio_dev_only}
+    ports:
+      - "${MINIO_PORT:-59000}:9000"      # S3互換API
+      - "${MINIO_CONSOLE_PORT:-59001}:9001"  # 管理画面
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── ここから下は各段階の着手時にビルドする ──
+
+  core:
+    profiles: ["app"]
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: dm_core
+    volumes:
+      - ./core:/work
+      - ./testdata:/testdata
+    # 常駐プロセスとして待機し、Go から標準入出力で呼ばれる。
+    # 第3・第4段階では CLI として単体でも動かす。
+    command: ["sleep", "infinity"]
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: dm_api
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-dm}:${POSTGRES_PASSWORD:-dm_dev_only}@postgres:5432/denpo_match?sslmode=disable
+      S3_ENDPOINT: http://minio:9000
+    ports:
+      - "${API_PORT:-58080}:8080"
+    volumes:
+      - ./api:/work
+
+  web:
+    profiles: ["app"]
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: dm_web
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-dm}:${POSTGRES_PASSWORD:-dm_dev_only}@postgres:5432/denpo_match
+      # 画面からのアップロードは Go の API へ中継する。
+      # Rails が直接ジョブを作らないのは、受付の手順を1箇所に保つため。
+      # 2箇所で作ると、片方だけ直したときに片方の経路だけ壊れる。
+      API_BASE: http://host.docker.internal:58080
+      # 開発中は Mac 側で go run しているので、コンテナから見た Mac を指す。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${WEB_PORT:-53000}:3000"
+    volumes:
+      - ./web:/work
+      # gem をコンテナの外に置く。名前付きボリュームにしないと
+      # docker run のたびに消え、毎回 bundle install からやり直しになる。
+      - webbundle:/usr/local/bundle
+
+volumes:
+  pgdata:
+  miniodata:
+  webbundle:

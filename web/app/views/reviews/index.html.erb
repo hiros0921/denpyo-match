@@ -1,0 +1,19 @@
+<h1>承認キュー</h1>
+<p class="lead">
+  人が見るべき伝票。要確認と却下を分けてあります。同じ「人が見る」でも意味が違います。
+</p>
+
+<%= form_with url: reviews_path, method: :get, class: "card" do %>
+  <%= select_tag :client_id,
+        options_from_collection_for_select(@clients, :id, :name, params[:client_id]),
+        include_blank: "すべての顧問先" %>
+  <%= submit_tag "絞り込む", name: nil %>
+<% end %>
+
+<h2>要確認 <span class="badge b-review"><%= @needs_review.size %></span></h2>
+<p class="small">候補はあります。合っているか確かめてください。</p>
+<%= render "reviews/queue", rows: @needs_review, kind: :review %>
+
+<h2>却下 <span class="badge b-reject"><%= @rejected.size %></span></h2>
+<p class="small">候補が無い、またはスコアが低すぎます。画像を見て手で入れる必要があります。</p>
+<%= render "reviews/queue", rows: @rejected, kind: :reject %>
