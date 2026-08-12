@@ -388,13 +388,31 @@ C++ をビルドする。
 docker compose run --rm core bash -c "cmake -S . -B build && cmake --build build -j4"
 ```
 
+**この順番に意味がある。** Go の API は C++ の実行ファイルをプロセスとして
+呼ぶので、`./core/build` に実行ファイルが無いと動かない。先にビルドする。
+
 API とワーカー、画面を起動する。
 
 ```bash
 docker compose --profile app up -d
 ```
 
-画面は `http://localhost:53000`。
+画面は `http://localhost:53000`、API は `http://localhost:58080`。
+
+### api コンテナが ubuntu を土台にしている理由
+
+Go の公式イメージをそのまま使っていない。API は C++ の実行ファイルを
+呼ぶが、それは `core`（ubuntu:24.04）でビルドされていて、そこの共有
+ライブラリに soname まで結びついているため。
+
+```
+dm_preprocess → libopencv_imgcodecs.so.406 / libopencv_core.so.406 ...
+dm_ocr        → libtesseract.so.5 / liblept.so.5
+```
+
+土台が違うと「実行ファイルはあるのに起動できない」形で失敗する。
+エラーは C++ 側から出るので原因が分かりにくい。`api/Dockerfile` は
+Go の道具一式だけを公式イメージから持ってきて、土台は core と揃えてある。
 
 ---
 

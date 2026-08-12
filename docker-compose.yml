@@ -94,6 +94,14 @@ services:
       - "${API_PORT:-58080}:8080"
     volumes:
       - ./api:/work
+      # C++ の実行ファイル。core をビルドすると ./core/build に出る。
+      # 読むだけなので :ro。api 側から書き換える理由が無い。
+      - ./core:/core:ro
+      # 取引先マスタ（-masters の既定が /testdata/samples/masters.json）
+      - ./testdata:/testdata:ro
+      # 受け付けた画像と中間ファイル。コンテナを作り直しても消えないよう
+      # 名前付きボリュームにする。C++ も同じコンテナから同じパスで読む。
+      - apidata:/data
 
   web:
     profiles: ["app"]
@@ -108,8 +116,11 @@ services:
       # 画面からのアップロードは Go の API へ中継する。
       # Rails が直接ジョブを作らないのは、受付の手順を1箇所に保つため。
       # 2箇所で作ると、片方だけ直したときに片方の経路だけ壊れる。
-      API_BASE: http://host.docker.internal:58080
-      # 開発中は Mac 側で go run しているので、コンテナから見た Mac を指す。
+      #
+      # 既定は同じ compose の api を指す。Go を Mac 側で go run して
+      # 手元で直しながら動かすときは、.env に次を書いて上書きする。
+      #   API_BASE=http://host.docker.internal:58080
+      API_BASE: ${API_BASE:-http://api:8080}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -124,3 +135,5 @@ volumes:
   pgdata:
   miniodata:
   webbundle:
+  # 受け付けた画像と中間ファイル。api コンテナの /data。
+  apidata:
