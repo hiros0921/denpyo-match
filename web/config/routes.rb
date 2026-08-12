@@ -1,5 +1,7 @@
 Rails.application.routes.draw do
-  devise_for :users
+  # 自分でアカウントを作る経路は塞ぐ。理由は app/models/user.rb に書いた。
+  # モデルから :registerable を外すだけだと、ルートは残ったままになる。
+  devise_for :users, skip: [:registrations]
 
   root "documents#index"
 

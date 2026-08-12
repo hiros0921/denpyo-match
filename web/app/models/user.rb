@@ -6,7 +6,23 @@
 # `rails generate devise User` を実行するとマイグレーションが作られ、
 # 正が2箇所になる。
 class User < ApplicationRecord
-  devise :database_authenticatable, :registerable,
+  # ── :registerable を外している ──
+  #
+  # 自分でアカウントを作れないようにする。会計事務所向けなので、
+  # 職員は必ずどこかの事務所（organization）に属している必要があり、
+  # その紐付けを本人の自己申告に任せるわけにいかない。
+  # 他人の顧問先の帳票が見える事故は、これで起きる。
+  #
+  # 実際 users.organization_id は NOT NULL で既定値も無いため、
+  # Devise の標準登録画面（メールとパスワードしか送らない）では
+  # 必ず失敗していた。リンクは見えるのに押すと失敗する状態だったので、
+  # 入口ごと塞いだ。ルート側でも skip している（config/routes.rb）。
+  #
+  # 【重要】モデルとルートの両方を直すこと。片方だけだと、
+  # gem 標準のビューが登録リンクを出したまま、存在しないルートを指す。
+  #
+  # 職員の追加は管理者が行う。手順は docs/PROGRESS.md に置いてある。
+  devise :database_authenticatable,
          :recoverable, :rememberable, :validatable, :trackable
 
   belongs_to :organization

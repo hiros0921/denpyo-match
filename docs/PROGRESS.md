@@ -1728,6 +1728,61 @@ DB の行を 95/55 で置き換えて解決。**既定値を変えても、DBに
 
 **同一取引先の屋号違い。** 機械には区別できない。
 
+## 職員アカウントの追加
+
+自分でアカウントを作る経路（`/users/sign_up`）は塞いである。会計事務所
+向けなので、職員は必ずどこかの事務所に属している必要があり、その紐付けを
+本人の自己申告に任せるわけにいかない。他人の顧問先の帳票が見える事故は
+そこで起きる。
+
+実際 `users.organization_id` は NOT NULL で既定値も無いため、Devise の
+標準登録画面（メールとパスワードしか送らない）では必ず失敗していた。
+「リンクは見えるのに押すと失敗する」状態だったので、入口ごと塞いだ。
+
+- `app/models/user.rb` から `:registerable` を外す
+- `config/routes.rb` で `skip: [:registrations]`
+
+**両方を直すこと。** 片方だけだと、gem 標準のビューが登録リンクを
+出したまま、存在しないルートを指してエラーになる。
+
+### 職員を1人追加する
+
+```bash
+docker compose exec web bin/rails runner '
+require "io/console"
+email = "追加する人のメールアドレス"
+org   = Organization.find_by!(name: "テスト会計事務所")
+pw    = IO.console.getpass("パスワード（8文字以上）: ")
+u = User.new(email: email, name: "氏名", organization: org,
+             role: User::ROLE_MEMBER)   # 管理者にするなら ROLE_ADMIN
+u.password = pw
+u.password_confirmation = pw
+u.save! ? puts("作成しました: #{email}") : puts(u.errors.full_messages)
+'
+```
+
+`-T` を付けない。`IO.console.getpass` は端末が要る。こうすると
+パスワードが画面にもシェルの履歴にも残らない。
+
+### 既存の職員のパスワードを設定し直す
+
+```bash
+docker compose exec web bin/rails runner '
+require "io/console"
+u  = User.find_by!(email: "admin@example.com")
+pw = IO.console.getpass("新しいパスワード（8文字以上）: ")
+u.password = pw
+u.password_confirmation = pw
+u.save! ? puts("設定しました") : puts(u.errors.full_messages)
+'
+```
+
+`role` は 1 が一般職員、2 が管理者。管理者だけが閾値の変更と契約の
+手続きをできる（`can_edit_threshold?` / `can_manage_billing?`）。
+
+将来的に画面から職員を追加できるようにするなら、管理者が自分の組織にだけ
+ユーザーを追加できる招待の仕組みが要る。誰でも登録できる形には戻さない。
+
 ## 次にやること
 
 **残っている宿題**
