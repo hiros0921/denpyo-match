@@ -22,6 +22,7 @@ api/dbtest
 api/ocrcompare
 api/weightsweep
 api/billingtest
+api/truncsweep
 
 # Rails
 # 【重要】master.key は credentials.yml.enc を復号できる鍵。

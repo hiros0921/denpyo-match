@@ -318,6 +318,19 @@ type SaveSettlement struct {
 	Candidates []SaveSettleCandidate
 	// 監査ログの action
 	AuditAction string
+	// 選ばれた候補が曖昧（摘要が複数の取引先に一致）だったときの根拠。
+	// nil なら曖昧ではない。「なぜ自動承認されなかったのか」を
+	// 後から説明できるよう、監査ログの after にそのまま記録する。
+	Ambiguity *AmbiguityAudit
+}
+
+// AmbiguityAudit は監査ログに残す曖昧さの根拠。
+// 摘要の正規形・前方一致した取引先の一覧・適用した上限値。
+type AmbiguityAudit struct {
+	Norm    string   `json:"norm"`
+	Matched []string `json:"matched"`
+	Cap     float64  `json:"cap"`
+	Forced  bool     `json:"forced"`
 }
 
 type SaveSettleCandidate struct {
@@ -392,10 +405,14 @@ func (s *Store) SaveSettlement(ctx context.Context, in SaveSettlement) error {
 		return fmt.Errorf("突合の結論を書けません: %w", err)
 	}
 
-	after, _ := json.Marshal(map[string]any{
+	afterFields := map[string]any{
 		"status": in.Status, "transaction_id": in.TransactionID,
 		"score": in.Score, "why": in.Why,
-	})
+	}
+	if in.Ambiguity != nil {
+		afterFields["ambiguity"] = in.Ambiguity
+	}
+	after, _ := json.Marshal(afterFields)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO audit_logs
 		  (organization_id, actor_id, target_table, target_id, action, after)
@@ -404,4 +421,90 @@ func (s *Store) SaveSettlement(ctx context.Context, in SaveSettlement) error {
 		return fmt.Errorf("監査ログを書けません: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// ── 摘要の桁切れによる曖昧さ ──
+
+// Ambiguity は「この摘要は複数の取引先に一致する」という判定結果。
+type Ambiguity struct {
+	// 摘要の正規形。前方一致に使った文字列。
+	Norm string
+	// 前方一致した取引先の名前。2件以上なら曖昧。
+	Matched []string
+	// 桁が上限に達している＝切れている可能性がある。
+	// これが false なら、何件一致しても曖昧とはみなさない。
+	AtLimit bool
+}
+
+func (a Ambiguity) IsAmbiguous() bool { return a.AtLimit && len(a.Matched) >= 2 }
+
+// CheckAmbiguity は摘要が複数の取引先に一致しないかを1クエリで調べる。
+//
+// ── 判定の順序 ──
+//
+//	① その取り込みで一番長い摘要の桁数 M を出す
+//	② M に達している行が2行以上あるときだけ、M を「桁の上限」とみなす
+//	   （切れていない取り込みでも最長の1行は必ずあるので、
+//	    1行だけなら桁の上限ではなく、たまたま長い摘要とみなす）
+//	③ この行が M に達していなければ、切れていない。曖昧ではない
+//	④ 達していれば、正規形で始まる取引先を引く。2件以上なら曖昧
+//
+// ②③が要る理由は実測にある。この条件が無いと、短い社名が長い社名の
+// 前方一致になる組（見本印刷／見本印刷工業）で、切れていない摘要まで
+// 永久に曖昧扱いになり、無切断で115件中15件の自動突合を失った。
+// 条件を付けたら115件のまま変わらなかった。
+//
+// 濁点を落とした形でも引くのは、半角カナで濁点が1桁を食うため。
+// ｷﾞ が ｷ に化けると、濁点ありだけでは正解自身が前方一致しない。
+func (s *Store) CheckAmbiguity(ctx context.Context, clientID, txID int64) (Ambiguity, error) {
+	var out Ambiguity
+	err := s.Pool.QueryRow(ctx, `
+		WITH t AS (
+		  SELECT batch_id, normalized_name AS norm, char_length(description) AS len
+		    FROM transactions WHERE id = $2 AND client_id = $1
+		),
+		b AS (
+		  SELECT max(char_length(x.description)) AS maxlen,
+		         count(*) AS total
+		    FROM transactions x, t WHERE x.batch_id = t.batch_id
+		),
+		atmax AS (
+		  SELECT count(*) AS n
+		    FROM transactions x, t, b
+		   WHERE x.batch_id = t.batch_id
+		     AND char_length(x.description) = b.maxlen
+		),
+		f AS (
+		  SELECT t.norm,
+		         (t.len >= b.maxlen AND atmax.n >= 2 AND t.norm <> '') AS at_limit
+		    FROM t, b, atmax
+		),
+		-- LIKE のメタ文字を無効化する。正規形は原則カナと英数だが、
+		-- % や _ が混ざると前方一致が別物になる。
+		pat AS (
+		  SELECT f.norm, f.at_limit,
+		         replace(replace(replace(f.norm,'\','\\'),'%','\%'),'_','\_') || '%' AS p,
+		         replace(replace(replace(dm_strip_daku(f.norm),'\','\\'),'%','\%'),'_','\_') || '%' AS pd
+		    FROM f
+		),
+		m AS (
+		  SELECT DISTINCT p.name
+		    FROM partners p, pat
+		   WHERE p.client_id = $1 AND pat.at_limit
+		     AND (p.norm LIKE pat.p OR dm_strip_daku(p.norm) LIKE pat.pd)
+		  UNION
+		  SELECT DISTINCT p.name
+		    FROM partner_aliases a
+		    JOIN partners p ON p.id = a.partner_id, pat
+		   WHERE p.client_id = $1 AND pat.at_limit
+		     AND (a.norm LIKE pat.p OR dm_strip_daku(a.norm) LIKE pat.pd)
+		)
+		SELECT pat.norm, pat.at_limit,
+		       coalesce((SELECT array_agg(name ORDER BY name) FROM m), '{}')
+		  FROM pat`,
+		clientID, txID).Scan(&out.Norm, &out.AtLimit, &out.Matched)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	return out, err
 }

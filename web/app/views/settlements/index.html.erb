@@ -126,6 +126,12 @@
                     <%= c["transaction_date"] %>
                     （<%= SettlementQuery.source_ja(c["source_type"]) %>）
                   </span>
+                  <% if c["why"].present? %>
+                    <%# 摘要が複数の取引先に一致するときの理由もここに入る
+                        （settle.Ambiguity#Why）。人が確定してよいかを
+                        その場で判断できるよう、候補ごとに見せる。 %>
+                    <br><span class="small"><%= c["why"] %></span>
+                  <% end %>
                 </td>
                 <td class="num"><%= c["score"].to_f.round(1) %></td>
                 <td class="num"><%= c["name_score"].to_f.round(0) %></td>

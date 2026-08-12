@@ -92,6 +92,9 @@ type Scored struct {
 	AmountScore float64
 	DateScore   float64
 	Why         string
+	// 摘要が複数の取引先に一致する（＝一意に定まらない）と判定されたとき設定される。
+	// nil なら曖昧ではない。
+	Ambiguity *Ambiguity
 }
 
 // Score は1候補を採点する。
@@ -176,16 +179,31 @@ func Decide(scored []Scored, th decide.Threshold) Result {
 			best = s
 		}
 	}
+
+	// 曖昧で頭打ちでは守れない設定（CapFor が ok=false を返した）のときは、
+	// 名前スコアを触っていないのでスコアがそのまま上限を超えうる。
+	// スコアの比較より先に、必ず要確認へ落とす。
+	if best.Ambiguity != nil && best.Ambiguity.Forced {
+		return Result{Status: StatusReview, Best: &best,
+			Why: fmt.Sprintf("スコア%.1f（名前%.0f 金額%.0f 日付%.0f）。%s",
+				best.Score, best.NameScore, best.AmountScore, best.DateScore,
+				best.Ambiguity.Why())}
+	}
+
 	switch {
 	case best.Score >= th.Upper:
-		return Result{Status: StatusAuto, Best: &best,
-			Why: fmt.Sprintf("スコア%.1f（名前%.0f 金額%.0f 日付%.0f）が上限%.0f以上。%s",
-				best.Score, best.NameScore, best.AmountScore, best.DateScore,
-				th.Upper, best.Why)}
+		why := fmt.Sprintf("スコア%.1f（名前%.0f 金額%.0f 日付%.0f）が上限%.0f以上。%s",
+			best.Score, best.NameScore, best.AmountScore, best.DateScore,
+			th.Upper, best.Why)
+		return Result{Status: StatusAuto, Best: &best, Why: why}
 	case best.Score >= th.Lower:
-		return Result{Status: StatusReview, Best: &best,
-			Why: fmt.Sprintf("スコア%.1f（名前%.0f 金額%.0f 日付%.0f）。人の確認が要ります。%s",
-				best.Score, best.NameScore, best.AmountScore, best.DateScore, best.Why)}
+		why := fmt.Sprintf("スコア%.1f（名前%.0f 金額%.0f 日付%.0f）。人の確認が要ります。%s",
+			best.Score, best.NameScore, best.AmountScore, best.DateScore, best.Why)
+		if best.Ambiguity != nil {
+			// 頭打ちで守れた場合。要確認になった理由に曖昧さを併記する。
+			why += " " + best.Ambiguity.Why()
+		}
+		return Result{Status: StatusReview, Best: &best, Why: why}
 	default:
 		// 最有力でも下限未満。候補は保存されるので、画面では見られる。
 		return Result{Status: StatusNone,

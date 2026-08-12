@@ -118,10 +118,30 @@ func (r *Runner) SettleClient(ctx context.Context, orgID, clientID int64) (Stats
 			save.TransactionID = &id
 			save.Score = &sc
 		}
+		// 選ばれた候補が曖昧だった場合は、action を専用のものに差し替え、
+		// 監査ログに根拠（正規形・前方一致した相手・上限値）を残す。
+		//
+		// settle_review と分けるのは、要確認になった理由が「スコアが微妙」
+		// なのか「摘要が複数の取引先に一致するため機械的に止めた」のかで、
+		// 現場の対応がまったく違うため。後者だけを一覧で追えるようにする。
+		if res.Best != nil && res.Best.Ambiguity != nil {
+			a := res.Best.Ambiguity
+			save.AuditAction = "settle_capped"
+			save.Ambiguity = &store.AmbiguityAudit{
+				Norm: a.Norm, Matched: a.Matched, Cap: a.Cap, Forced: a.Forced,
+			}
+		}
 		for _, c := range cands {
+			why := c.Why
+			// 曖昧と判定された候補は、その理由を候補ごとの説明にも足す。
+			// 一覧画面で1位以外の候補にも同じ根拠が見えないと、
+			// 「なぜ2位が選ばれなかったか」を人が確かめられない。
+			if c.Ambiguity != nil {
+				why += " " + c.Ambiguity.Why()
+			}
 			save.Candidates = append(save.Candidates, store.SaveSettleCandidate{
 				TransactionID: c.ID, Score: c.Score, NameScore: c.NameScore,
-				AmountScore: c.AmountScore, DateScore: c.DateScore, Why: c.Why,
+				AmountScore: c.AmountScore, DateScore: c.DateScore, Why: why,
 			})
 		}
 		if err := r.St.SaveSettlement(ctx, save); err != nil {
@@ -158,7 +178,11 @@ func (r *Runner) settleOne(ctx context.Context, clientID int64, d store.SettleDo
 	if canonical == "" {
 		// 名前が何も無い伝票。名前スコア0で金額と日付だけで採点する。
 		for _, t := range txs {
-			scored = append(scored, Score(docOf(d), txOf(t, 0)))
+			sc, err := r.scoreCandidate(ctx, clientID, d, t, 0, th)
+			if err != nil {
+				return Result{}, nil, err
+			}
+			scored = append(scored, sc)
 		}
 		return Decide(scored, th), scored, nil
 	}
@@ -180,9 +204,49 @@ func (r *Runner) settleOne(ctx context.Context, clientID int64, d store.SettleDo
 				name = m.Results[0].Score
 			}
 		}
-		scored = append(scored, Score(docOf(d), txOf(t, name)))
+		sc, err := r.scoreCandidate(ctx, clientID, d, t, name, th)
+		if err != nil {
+			return Result{}, nil, err
+		}
+		scored = append(scored, sc)
 	}
 	return Decide(scored, th), scored, nil
+}
+
+// scoreCandidate は1件の入出金候補を採点し、曖昧さの検査を挟む。
+//
+// ── なぜここに挟むか ──
+//
+// 銀行明細の摘要は桁数制限で切れる。長い社名が切れると、短い別会社の
+// 名前と完全一致することがある（実測: 見本印刷工業 が12桁で切れると
+// 見本印刷（別会社）と完全一致し score=100.0）。誤ったほうが
+// lev/jac/prefix すべて1.00の完全一致になるため、重みの配分をどう
+// 変えても勝てない。だから採点そのものではなく、採点に入れる前の
+// 名前スコアを頭打ちにする。
+//
+// 曖昧かどうかは摘要（入出金）1件ごとに決まり、どの伝票と照合するかには
+// 依存しない。伝票ごとに毎回同じ判定を引き直すのは無駄に見えるが、
+// 候補は金額の窓で絞られていて1伝票あたり数件程度なので、
+// 判定をキャッシュする複雑さのほうが割に合わない。
+func (r *Runner) scoreCandidate(ctx context.Context, clientID int64,
+	d store.SettleDoc, t store.TxCandidate, name float64,
+	th decide.Threshold) (Scored, error) {
+
+	amb, err := r.St.CheckAmbiguity(ctx, clientID, t.ID)
+	if err != nil {
+		return Scored{}, fmt.Errorf("曖昧さの判定に失敗（入出金%d）: %w", t.ID, err)
+	}
+
+	var ambInfo *Ambiguity
+	if amb.IsAmbiguous() {
+		cap, ok := CapFor(th.Upper, th.Lower)
+		ambInfo = &Ambiguity{Norm: amb.Norm, Matched: amb.Matched, Cap: cap, Forced: !ok}
+		name = CapName(name, cap, ok)
+	}
+
+	sc := Score(docOf(d), txOf(t, name))
+	sc.Ambiguity = ambInfo
+	return sc, nil
 }
 
 func docOf(d store.SettleDoc) Doc {
