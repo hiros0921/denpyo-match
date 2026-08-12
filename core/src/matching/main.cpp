@@ -158,7 +158,9 @@ double ms_since(std::chrono::steady_clock::time_point t0) {
 //
 // 1件ずつプロセスを起動すると、1万件で1万回の起動になる。
 // まとめて渡せるようにしてあるのはそのため。
-int run_normalize(bool as_json) {
+int run_normalize(bool as_json, bool bank) {
+    dm::NormOptions opt;
+    opt.bank = bank;
     std::vector<std::string> in;
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -169,7 +171,7 @@ int run_normalize(bool as_json) {
         std::cout << "{\"norms\":[";
         for (size_t i = 0; i < in.size(); ++i) {
             if (i) std::cout << ",";
-            const std::string n = dm::normalize(in[i]);
+            const std::string n = dm::normalize(in[i], opt);
             std::cout << "\"";
             for (char c : n) {   // JSON として壊れない形にする
                 if (c == '"' || c == '\\') std::cout << '\\' << c;
@@ -180,7 +182,7 @@ int run_normalize(bool as_json) {
         }
         std::cout << "]}" << std::endl;
     } else {
-        for (const auto& s : in) std::cout << dm::normalize(s) << "\n";
+        for (const auto& s : in) std::cout << dm::normalize(s, opt) << "\n";
     }
     return 0;
 }
@@ -191,6 +193,8 @@ int main(int argc, char** argv) {
     double noise_rate = 0.0;   // OCRの誤読を模す割合
     bool as_json = false;      // 機械が読む形で出す（Go から呼ぶとき）
     bool normalize_mode = false;
+    // 銀行明細の摘要として正規化する（全銀協略号・取引種別語の除去）
+    bool bank_mode = false;
     dm::Weights w;
 
     for (int i = 1; i < argc; ++i) {
@@ -201,6 +205,7 @@ int main(int argc, char** argv) {
         };
         if      (a == "--self-test") return run_match_self_test();
         else if (a == "--normalize") normalize_mode = true;
+        else if (a == "--bank")      bank_mode = true;
         else if (a == "--masters")   masters_path = next();
         else if (a == "--query")     query = next();
         else if (a == "--bench")     bench = std::stoi(next());
@@ -214,12 +219,12 @@ int main(int argc, char** argv) {
         else { std::cerr << "不明なオプション: " << a << "\n"; return 2; }
     }
 
-    if (normalize_mode) return run_normalize(as_json);
+    if (normalize_mode) return run_normalize(as_json, bank_mode);
 
     if (masters_path.empty()) {
         std::cerr << "使い方: dm_match --masters <json> [--query <名前> | --bench <件数>]\n"
                      "        dm_match --self-test\n"
-                     "        dm_match --normalize [--json]   … 標準入力から1行1件\n";
+                     "        dm_match --normalize [--bank] [--json]   … 標準入力から1行1件\n";
         return 2;
     }
 

@@ -40,6 +40,55 @@ class ApiClient
     end
   end
 
+  # 明細CSVの取り込み。Go 側で解釈・正規化・保存・突合まで行う。
+  def import_transactions(file:, client_id:, source_type:)
+    uri = URI.join(@base, "/v1/transactions/import")
+    boundary = "dm#{SecureRandom.hex(12)}"
+    req = Net::HTTP::Post.new(uri)
+    req["Content-Type"] = "multipart/form-data; boundary=#{boundary}"
+    req.body = build_multipart_fields(boundary, file,
+      "client_id" => client_id, "source_type" => source_type)
+
+    # 取り込みに続けて突合まで走るので、伝票のアップロードより待つ。
+    res = perform(uri, req, timeout: 300)
+    if res.code == "200"
+      b = JSON.parse(res.body)
+      { ok: true, rows: b["rows"], skipped: b["skipped"], settle: b["settle"] }
+    else
+      { ok: false, error: error_message(res) }
+    end
+  end
+
+  def run_settlements(client_id:)
+    uri = URI.join(@base, "/v1/settlements/run")
+    req = Net::HTTP::Post.new(uri)
+    req["Content-Type"] = "application/json"
+    req.body = { client_id: client_id.to_i }.to_json
+    res = perform(uri, req, timeout: 300)
+    res.code == "200" ? { ok: true, stats: JSON.parse(res.body) }
+                      : { ok: false, error: error_message(res) }
+  end
+
+  def confirm_settlement(document_id:, organization_id:, actor_id:,
+                         transaction_id: nil, none: false, learn_alias: nil)
+    uri = URI.join(@base, "/v1/documents/#{document_id}/settlement")
+    req = Net::HTTP::Post.new(uri)
+    req["Content-Type"] = "application/json"
+    req.body = {
+      organization_id: organization_id, actor_id: actor_id,
+      transaction_id: transaction_id&.to_i,
+      none: none.presence && true,
+      learn_alias: learn_alias
+    }.compact.to_json
+    res = perform(uri, req, timeout: 60)
+    if res.code == "200"
+      b = JSON.parse(res.body)
+      { ok: true, alias_error: b["alias_error"] }
+    else
+      { ok: false, error: error_message(res) }
+    end
+  end
+
   def decide(document_id:, organization_id:, actor_id:, decision:,
              partner_id: nil, learn_alias: nil)
     uri = URI.join(@base, "/v1/documents/#{document_id}/decision")
@@ -124,6 +173,27 @@ class ApiClient
     JSON.parse(res.body)["error"].presence || "処理に失敗しました（#{res.code}）"
   rescue JSON::ParserError
     "処理に失敗しました（#{res.code}）"
+  end
+
+  # 任意の項目でmultipartを組む。
+  # build_multipart（伝票アップロード用）と分けているのは、
+  # 項目の並びと必須項目が別だから。1つにまとめると
+  # どちらかの経路にしか無い項目を空で送ることになる。
+  def build_multipart_fields(boundary, file, fields)
+    parts = []
+    fields.each do |k, v|
+      next if v.blank?
+      parts << "--#{boundary}\r\n" \
+               "Content-Disposition: form-data; name=\"#{k}\"\r\n\r\n#{v}\r\n"
+    end
+    parts << "--#{boundary}\r\n" \
+             "Content-Disposition: form-data; name=\"file\"; " \
+             "filename=\"#{file.original_filename}\"\r\n" \
+             "Content-Type: text/csv\r\n\r\n"
+    body = parts.join.dup.force_encoding(Encoding::BINARY)
+    body << file.read.force_encoding(Encoding::BINARY)
+    body << "\r\n--#{boundary}--\r\n".b
+    body
   end
 
   def build_multipart(boundary, file, client_id, doc_type, direction = nil)

@@ -29,6 +29,7 @@ import (
 
 	"github.com/hiros0921/denpo-match/api/internal/billing"
 	"github.com/hiros0921/denpo-match/api/internal/core"
+	"github.com/hiros0921/denpo-match/api/internal/settle"
 	"github.com/hiros0921/denpo-match/api/internal/store"
 )
 
@@ -48,6 +49,9 @@ type Server struct {
 	// Go 側で書き直さず、C++ の実装を呼ぶ。
 	// 保存時と照会時でルールがずれると、候補生成が静かに当たらなくなる。
 	Norm *core.Runner
+
+	// 入出金の突合。設定されていなければ取り込み時の突合を行わない。
+	Settle *settle.Runner
 
 	// アップロードされた画像を置く場所。本番は R2 に上げてキーだけ持つ。
 	ImageRoot string
@@ -74,6 +78,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/billing/checkout", s.billingCheckout)
 	mux.HandleFunc("POST /v1/billing/portal", s.billingPortal)
 	mux.HandleFunc("POST /v1/billing/webhook", s.billingWebhook)
+	mux.HandleFunc("POST /v1/transactions/import", s.importTransactions)
+	mux.HandleFunc("POST /v1/settlements/run", s.runSettlements)
+	mux.HandleFunc("POST /v1/documents/{id}/settlement", s.confirmSettlement)
 	mux.HandleFunc("GET /v1/aliases", s.aliases)
 	mux.HandleFunc("DELETE /v1/aliases/{id}", s.forgetAlias)
 	return s.withLog(mux)

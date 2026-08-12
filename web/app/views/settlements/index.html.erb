@@ -1,0 +1,193 @@
+<h1>入出金との突合</h1>
+<p class="lead">
+  受け取った伝票に対応する支払いが、実際にあったかを確かめます。
+  取引先マスタとの照合が「誰からの請求か」を決めるのに対し、こちらは「本当に払ったか」を決めます。
+</p>
+
+<%# 明細を入れないと何も始まらないので、取り込み口を一番上に置く。 %>
+<div class="card">
+  <h2>明細の取り込み</h2>
+  <%= form_with url: import_settlements_path, method: :post, multipart: true do %>
+    <p>
+      <label>顧問先</label><br>
+      <%= select_tag :client_id,
+            options_from_collection_for_select(@clients, :id, :name, @client_id) %>
+    </p>
+    <p>
+      <label>種類</label><br>
+      <%= select_tag :source_type, options_for_select([["銀行明細", 1], ["カード明細", 2]]) %>
+    </p>
+    <p>
+      <label>CSV</label><br>
+      <%= file_field_tag :file, accept: ".csv,text/csv" %>
+      <span class="small">Shift_JIS でも UTF-8 でも読めます。列名の違いは吸収します</span>
+    </p>
+    <%= submit_tag "取り込む", class: "primary" %>
+  <% end %>
+  <p class="small">
+    同じファイルを二度入れても増えません。期間が重なった明細も、同じ取引は取り込みません。
+    <%# 「同じ日に同じ店で2回買う」は正当なので、内容だけでは重複と判定していない %>
+    ただし同じ日に同じ額を複数回払った取引は、別のものとして正しく残ります。
+  </p>
+</div>
+
+<%= form_with url: run_settlements_path, method: :post,
+      data: { turbo: false }, class: "card" do %>
+  <%= hidden_field_tag :client_id, @client_id %>
+  <strong>突合をやり直す</strong>
+  <p class="small">
+    表記を覚えさせたあとや、閾値を変えたあとに使います。
+    人が確定した伝票は上書きしません。
+  </p>
+  <%= submit_tag "再実行", class: "primary" %>
+<% end %>
+
+<h2>状態</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>状態</th><th class="num">件数</th></tr></thead>
+    <tbody>
+      <% [SettlementQuery::AUTO, SettlementQuery::CONFIRMED,
+          SettlementQuery::REVIEW, SettlementQuery::NONE,
+          SettlementQuery::NONE_FIXED].each do |st| %>
+        <tr>
+          <td><%= link_to SettlementQuery.label(st),
+                    settlements_path(client_id: @client_id, only: st) %></td>
+          <td class="num"><%= @counts[st] || 0 %></td>
+        </tr>
+      <% end %>
+      <%# 「突合していない」と「相手なし」は意味がまったく違う。
+          前者は金額が読めていないだけ。混ぜると現金取引だと誤解される。 %>
+      <tr>
+        <td>まだ突合していない<br>
+          <span class="small">金額が読み取れていない伝票</span></td>
+        <td class="num"><%= @unsettled %></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="small">
+    <%= link_to "人が見るものだけ", settlements_path(client_id: @client_id, only: "attention") %>
+    ／ <%= link_to "すべて", settlements_path(client_id: @client_id, only: "all") %>
+  </p>
+</div>
+
+<h2>
+  一覧
+  <span class="small">
+    該当 <%= @total %> 件<% if @total > SettlementQuery::LIMIT %>（先頭 <%= SettlementQuery::LIMIT %> 件）<% end %>
+  </span>
+</h2>
+
+<% if @rows.empty? %>
+  <p>該当する伝票はありません。</p>
+<% else %>
+  <% @rows.each do |r| %>
+    <div class="card">
+      <p>
+        <%= link_to "伝票 #{r['document_id']}", document_path(r['document_id']) %>
+        <span class="badge b-plain"><%= SettlementQuery.label(r["status"]) %></span>
+        <% if r["score"] %>
+          <span class="mono">スコア <%= r["score"].to_f.round(1) %></span>
+        <% end %>
+        <br>
+        <strong><%= r["issuer"].presence || "（発行元を読み取れず）" %></strong>
+        <span class="mono">
+          <%= number_with_delimiter(r["total_text"].to_i) %>円
+          <%= r["issue_date"] %>
+        </span>
+      </p>
+
+      <% if r["tx_desc"] %>
+        <p class="small">
+          対応する入出金:
+          <span class="mono"><%= r["tx_desc"] %></span>
+          <%= number_with_delimiter(r["tx_amount"].to_i) %>円
+          <%= r["transaction_date"] %>
+          （<%= SettlementQuery.source_ja(r["tx_source"]) %>）
+        </p>
+      <% end %>
+      <p class="small"><%= r["why"] %></p>
+
+      <%# 候補と内訳。「なぜこれが1位か」を見せないと現場は信用しない。 %>
+      <% cands = SettlementQuery.candidates(r["document_id"]) %>
+      <% if cands.any? && [SettlementQuery::REVIEW, SettlementQuery::NONE].include?(r["status"].to_i) %>
+        <table>
+          <thead>
+            <tr><th>候補</th><th class="num">合計</th><th class="num">名前</th>
+                <th class="num">金額</th><th class="num">日付</th><th></th></tr>
+          </thead>
+          <tbody>
+            <% cands.each do |c| %>
+              <tr>
+                <td>
+                  <span class="mono"><%= c["description"] %></span><br>
+                  <span class="small">
+                    <%= number_with_delimiter(c["amount"].to_i) %>円
+                    <%= c["transaction_date"] %>
+                    （<%= SettlementQuery.source_ja(c["source_type"]) %>）
+                  </span>
+                </td>
+                <td class="num"><%= c["score"].to_f.round(1) %></td>
+                <td class="num"><%= c["name_score"].to_f.round(0) %></td>
+                <td class="num"><%= c["amount_score"].to_f.round(0) %></td>
+                <td class="num"><%= c["date_score"].to_f.round(0) %></td>
+                <td>
+                  <%# 摘要の表記を覚えると、次から名前が100点になる。
+                      実測: 90.3（要確認）→ 100.0（自動突合）。 %>
+                  <%= form_with url: confirm_settlement_path(r["document_id"]),
+                        method: :post, data: { turbo: false },
+                        style: "display:inline" do %>
+                    <%= hidden_field_tag :transaction_id, c["transaction_id"] %>
+                    <%= hidden_field_tag :learn_alias, c["description"] %>
+                    <%= submit_tag "これで確定し、表記を覚える", class: "primary" %>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      <% end %>
+
+      <% if [SettlementQuery::REVIEW, SettlementQuery::NONE].include?(r["status"].to_i) %>
+        <%= form_with url: confirm_settlement_path(r["document_id"]),
+              method: :post, data: { turbo: false }, style: "display:inline" do %>
+          <%= hidden_field_tag :none, "1" %>
+          <%= submit_tag "対応する入出金なし（現金払いなど）" %>
+        <% end %>
+      <% end %>
+    </div>
+  <% end %>
+<% end %>
+
+<h2>取り込みの履歴</h2>
+<p class="small">
+  <%# 「相手なし」が現金なのか取り込み漏れなのかは、
+      どの期間まで明細が入っているかを見ないと判断できない。 %>
+  「相手なし」の伝票を見るときは、まずこの期間を確認してください。
+  明細が入っていない期間の伝票は、現金払いではなく取り込み漏れです。
+</p>
+<% if @batches.empty? %>
+  <p>まだ取り込んでいません。</p>
+<% else %>
+  <table>
+    <thead>
+      <tr><th>取り込み</th><th>顧問先</th><th>種類</th><th>期間</th>
+          <th class="num">件数</th><th class="num">重複</th></tr>
+    </thead>
+    <tbody>
+      <% @batches.each do |b| %>
+        <tr>
+          <td>
+            <%= b["filename"] %><br>
+            <span class="small"><%= b["created_at"] %></span>
+          </td>
+          <td><%= b["client_name"] %></td>
+          <td><%= SettlementQuery.source_ja(b["source_type"]) %></td>
+          <td class="mono"><%= b["from_date"] %> 〜 <%= b["to_date"] %></td>
+          <td class="num"><%= b["row_count"] %></td>
+          <td class="num"><%= b["skipped_count"] %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>

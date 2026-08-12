@@ -132,6 +132,68 @@ const std::vector<CorpForm> kCorpForms = {
     {"特定非営利活動法人", CorpKind::Other}, {"NPO法人", CorpKind::Other},
 };
 
+// ── 全銀協の略号 ──
+//
+// 銀行振込の口座名義・摘要では、法人格がカナ1〜3文字の略号になる。
+//   前に付く形   カ)ミライハイソウサービス
+//   後ろに付く形 ミホンセキユサービス(カ
+// 実際の帳票（受領した請求書の振込口座欄）で「カ)ミライハイソウサービス」
+// の形を確認している。
+//
+// 【注意】長いものから先に見る。「シャ)」を「シ)」で切ると、
+// 一般社団法人の略号が合資会社として処理され、ヤ が名前に残る。
+const std::vector<std::string> kBankCorpAbbrev = {
+    "トクヒ",  // 特定非営利活動法人
+    "シュウ",  // 宗教法人
+    "ザイ",    // 財団法人
+    "シャ",    // 社団法人
+    "ガク",    // 学校法人
+    "フク",    // 社会福祉法人
+    "イリョウ", // 医療法人（イ 1文字の略も多いが、イ) は誤削除が怖いので長い形だけ）
+    "カ",      // 株式会社
+    "ユ",      // 有限会社
+    "ド",      // 合同会社
+    "メ",      // 合名会社
+    "シ",      // 合資会社
+    "ソ",      // 相互会社
+};
+
+// 取引種別の語。名前の前に付く。
+// 【方針】実データで出たものだけを足す。推測で増やさない。
+// 「デビットカードサービス」のような社名を削る事故は、
+// 語彙を増やすほど起きやすくなる。
+const std::vector<std::string> kBankNoiseWords = {
+    "フリコミ", "フリカエ", "デビット",
+};
+
+// 銀行摘要の後始末。正規化パイプラインの最後に呼ぶ。
+// この時点で半角カナは全角に、空白は除去済み。
+std::string strip_bank_tokens(std::string s) {
+    // 取引種別の語（先頭のみ・繰り返し）
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto& w : kBankNoiseWords) {
+            if (s.rfind(w, 0) == 0) { s.erase(0, w.size()); changed = true; }
+        }
+    }
+    // 前に付く略号: カ)ミライ…
+    for (const auto& a : kBankCorpAbbrev) {
+        const std::string t = a + ")";
+        if (s.rfind(t, 0) == 0) { s.erase(0, t.size()); break; }
+    }
+    // 後ろに付く略号: ミホンセキユ(カ
+    for (const auto& a : kBankCorpAbbrev) {
+        const std::string t = "(" + a;
+        if (s.size() >= t.size() &&
+            s.compare(s.size() - t.size(), t.size(), t) == 0) {
+            s.erase(s.size() - t.size());
+            break;
+        }
+    }
+    return s;
+}
+
 }  // namespace
 
 CorpKind detect_corp(const std::string& s) {
@@ -220,7 +282,9 @@ std::string normalize(const std::string& s, const NormOptions& opt) {
 
         out.push_back(cp);
     }
-    return to_utf8(out);
+    std::string result = to_utf8(out);
+    if (opt.bank) result = strip_bank_tokens(result);
+    return result;
 }
 
 std::vector<std::string> ngrams(const std::string& normalized, int n) {

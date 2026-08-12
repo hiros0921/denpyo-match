@@ -30,6 +30,15 @@ Rails.application.routes.draw do
   # 誤認識の影響範囲。1件の誤りが他に及んでいないかを調べる。
   resources :impacts, only: [:index]
 
+  # 入出金との突合。受領した伝票に対応する支払いがあったかを確かめる。
+  resources :settlements, only: [:index] do
+    collection do
+      post :import   # 明細CSVの取り込み
+      post :run      # 突合の再実行
+    end
+    member { post :confirm }
+  end
+
   # インボイス登録番号の一括照合。受領側でしか発生しない作業。
   resources :invoice_regs, only: [:index]
 

@@ -24,6 +24,7 @@ import (
 	"github.com/hiros0921/denpo-match/api/internal/core"
 	"github.com/hiros0921/denpo-match/api/internal/httpapi"
 	"github.com/hiros0921/denpo-match/api/internal/pipeline"
+	"github.com/hiros0921/denpo-match/api/internal/settle"
 	"github.com/hiros0921/denpo-match/api/internal/store"
 	"github.com/hiros0921/denpo-match/api/internal/worker"
 )
@@ -92,6 +93,8 @@ func main() {
 
 	for i := 0; i < *workers; i++ {
 		w := worker.New(st, pipe, *orgID, *images, *imagesC)
+		w.Settle = &settle.Runner{St: st, Core: runner,
+			WorkDirHost: *work, WorkDirContainer: *workC}
 		wg.Add(1)
 		go func() { defer wg.Done(); w.Run(ctx) }()
 	}
@@ -103,6 +106,11 @@ func main() {
 		api := httpapi.New(st, runner, *images)
 		// 切り分けは C++ を呼ぶので、コンテナから見たパスが要る。
 		api.ImageRootContainer = *imagesC
+		// 入出金の突合。明細を取り込んだら、その顧問先の受領伝票を回す。
+		api.Settle = &settle.Runner{
+			St: st, Core: runner,
+			WorkDirHost: *work, WorkDirContainer: *workC,
+		}
 		api.AppBaseURL = *appURL
 
 		// 決済。設定が揃っていなければ nil のまま。

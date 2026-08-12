@@ -23,15 +23,20 @@ import (
 	"github.com/hiros0921/denpo-match/api/internal/decide"
 	"github.com/hiros0921/denpo-match/api/internal/invoice"
 	"github.com/hiros0921/denpo-match/api/internal/pipeline"
+	"github.com/hiros0921/denpo-match/api/internal/settle"
 	"github.com/hiros0921/denpo-match/api/internal/store"
 )
 
 type Worker struct {
-	ID    string
-	St    *store.Store
-	Pipe  *pipeline.Pipeline
-	Log   *slog.Logger
-	OrgID int64
+	// 入出金の突合。nil なら行わない。
+	// 伝票の処理が終わった直後に、その1枚ぶんだけ回す。
+	// 明細CSVが先に取り込まれていて、伝票が後から来る順序のため。
+	Settle *settle.Runner
+	ID     string
+	St     *store.Store
+	Pipe   *pipeline.Pipeline
+	Log    *slog.Logger
+	OrgID  int64
 
 	// 画像の実体がある場所。開発中はローカルのフォルダ。
 	// 本番は R2 から落として渡すが、その差はここだけに閉じる。
@@ -208,7 +213,19 @@ func (w *Worker) process(ctx context.Context, job *store.Job) error {
 		return err
 	}
 
-	return w.save(ctx, job, res, th)
+	if err := w.save(ctx, job, res, th); err != nil {
+		return err
+	}
+
+	// 受領伝票なら、入出金との突合も回す。
+	// 失敗しても伝票の処理は成立しているので、記録して続ける。
+	// 突合は取り込み時と手動でも再実行できる。
+	if w.Settle != nil && job.Direction == 1 {
+		if _, err := w.Settle.SettleClient(ctx, w.OrgID, job.ClientID); err != nil {
+			w.Log.Warn("突合に失敗（伝票の処理は完了）", "doc", job.DocumentID, "err", err)
+		}
+	}
+	return nil
 }
 
 // candidates は pg_trgm で第1段の絞り込みを行う。
