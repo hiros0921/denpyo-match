@@ -41,6 +41,10 @@ func (s *Server) importTransactions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "client_id を指定してください")
 		return
 	}
+	// 他事務所の顧問先へ明細を取り込ませない。
+	if s.denyOwn(w, s.ownClient(r, clientID)) {
+		return
+	}
 	srcN, _ := strconv.Atoi(r.FormValue("source_type"))
 	src := ledger.SourceType(srcN)
 	if src != ledger.Bank && src != ledger.Card {
@@ -137,11 +141,10 @@ func (s *Server) runSettlements(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "突合が設定されていません")
 		return
 	}
-	orgID, err := s.St.OrgIDForClient(r.Context(), in.ClientID)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "顧問先が見つかりません")
+	if s.denyOwn(w, s.ownClient(r, in.ClientID)) {
 		return
 	}
+	orgID, _ := orgFrom(r.Context())
 	stats, err := s.Settle.SettleClient(r.Context(), orgID, in.ClientID)
 	if err != nil {
 		s.Log.Error("突合に失敗", "err", err)
@@ -165,8 +168,8 @@ func (s *Server) confirmSettlement(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "伝票の番号が不正です")
 		return
 	}
+	// organization_id は受け取らない。署名から決まる（auth.go）。
 	var in struct {
-		OrgID         int64  `json:"organization_id"`
 		ActorID       int64  `json:"actor_id"`
 		TransactionID *int64 `json:"transaction_id"`
 		None          bool   `json:"none"`
@@ -176,8 +179,15 @@ func (s *Server) confirmSettlement(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "本文を読めません")
 		return
 	}
-	if in.OrgID <= 0 || in.ActorID <= 0 {
-		writeErr(w, http.StatusBadRequest, "organization_id と actor_id が要ります")
+	if in.ActorID <= 0 {
+		writeErr(w, http.StatusBadRequest, "actor_id が要ります")
+		return
+	}
+	orgID, _ := orgFrom(r.Context())
+	if s.denyOwn(w, s.ownDocument(r, docID)) {
+		return
+	}
+	if s.denyOwn(w, s.ownActor(r, in.ActorID)) {
 		return
 	}
 	if (in.TransactionID == nil) == !in.None {
@@ -187,7 +197,7 @@ func (s *Server) confirmSettlement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	save := store.SaveSettlement{
-		OrgID:      in.OrgID,
+		OrgID:      orgID,
 		DocumentID: docID,
 		ActorID:    &in.ActorID,
 	}
@@ -210,7 +220,7 @@ func (s *Server) confirmSettlement(w http.ResponseWriter, r *http.Request) {
 	// 摘要の表記を覚える。次からは名前スコアが100になり、
 	// 同じ相手の伝票は自動突合に届くようになる。
 	if in.LearnAlias != "" && in.TransactionID != nil {
-		if err := s.learnSettleAlias(r, docID, in.OrgID, in.ActorID,
+		if err := s.learnSettleAlias(r, docID, orgID, in.ActorID,
 			in.LearnAlias); err != nil {
 			// 確定は済んでいる。覚えられなかったことだけ伝える。
 			writeJSON(w, http.StatusOK, map[string]any{

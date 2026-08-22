@@ -104,6 +104,34 @@ func main() {
 
 	if *addr != "" {
 		api := httpapi.New(st, runner, *images)
+
+		// 呼び出し元の確認。
+		//
+		// 【重要】未設定なら起動しない。
+		// 警告にとどめると、警告は流れて動いてしまい、
+		// 「認証が効いていない状態で本番に出ている」に気付けるのは事故のあとになる。
+		// 開発で外したいときは、外したことが分かる形で明示させる。
+		switch sec := os.Getenv("DM_API_SECRET"); {
+		case sec != "":
+			auth, err := httpapi.NewAuth([]byte(sec), api.MaxUpload)
+			if err != nil {
+				slog.Error("起動できません", "err", err)
+				os.Exit(1)
+			}
+			api.Auth = auth
+			slog.Info("要求の署名を検証します")
+		case os.Getenv("DM_API_AUTH") == "off":
+			api.Auth = httpapi.NoAuth()
+			slog.Warn("署名の検証を切っています。" +
+				"この状態では、伝票IDを順に叩くだけで全事務所の伝票が読めます。" +
+				"開発以外で使わないこと（DM_API_AUTH=off）")
+		default:
+			slog.Error("起動できません",
+				"理由", "DM_API_SECRET が設定されていません",
+				"対処", "32文字以上の共有鍵を設定してください（openssl rand -hex 32）。"+
+					"開発で外す場合のみ DM_API_AUTH=off")
+			os.Exit(1)
+		}
 		// 切り分けは C++ を呼ぶので、コンテナから見たパスが要る。
 		api.ImageRootContainer = *imagesC
 		// 入出金の突合。明細を取り込んだら、その顧問先の受領伝票を回す。

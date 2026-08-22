@@ -19,11 +19,21 @@ class ApplicationController < ActionController::Base
   # 「取り返しがつかないのは止めたほう」という方針に反する。
   def billing_status
     return @billing_status if defined?(@billing_status)
-    @billing_status = ApiClient.new.billing_status(
-      organization_id: current_organization.id
-    )
+    @billing_status = api.billing_status
   rescue ApiClient::Unreachable
     @billing_status = nil
+  end
+
+  # API を呼ぶ口。
+  #
+  # 【重要】各画面で ApiClient.new を直接呼ばない。必ずこれを通す。
+  # 事務所IDを引数で渡す形だと、11か所ある呼び出しのどこか1つで
+  # current_organization 以外を渡した瞬間に、他事務所のデータへ手が届く。
+  # ここを1つだけ通す形にすれば、渡し間違える場所が無くなる。
+  #
+  # find_document! を1か所に置いているのと同じ理由による。
+  def api
+    @api ||= ApiClient.new(organization_id: current_organization.id)
   end
 
   def current_organization

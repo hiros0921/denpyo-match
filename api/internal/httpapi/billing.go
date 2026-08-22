@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/hiros0921/denpo-match/api/internal/billing"
@@ -15,16 +14,15 @@ import (
 
 // ── 契約状態の照会 ──
 
-// GET /v1/billing?organization_id=1
+// GET /v1/billing
 //
 // 画面はこれを見て「アップロードできるか」「何を出すか」を決める。
 // 判定を画面側にも書くと、2箇所で食い違う。判定はここ1つに集める。
+//
+// 事務所は署名から決まる。以前は organization_id を問い合わせ文字列で
+// 受け取っていたので、番号を書き換えれば他事務所の契約状態が読めた。
 func (s *Server) billingStatus(w http.ResponseWriter, r *http.Request) {
-	orgID, err := strconv.ParseInt(r.URL.Query().Get("organization_id"), 10, 64)
-	if err != nil || orgID <= 0 {
-		writeErr(w, http.StatusBadRequest, "organization_id を指定してください")
-		return
-	}
+	orgID, _ := orgFrom(r.Context())
 	b, err := s.St.LoadBilling(r.Context(), orgID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "その組織はありません")
@@ -60,9 +58,14 @@ func (s *Server) billingStatus(w http.ResponseWriter, r *http.Request) {
 
 // ── 申し込み・管理画面へのリンク ──
 
+// 【重要】organization_id をここに置かない。
+//
+// 事務所は署名から決まる（auth.go）。本文にも同じ意味の項目があると、
+// どちらを信じるかが口ごとにばらつく。
+// 特に billingPortal は Stripe の管理画面URLを返すので、
+// 他事務所の番号を通してしまうと、解約もカード情報の閲覧もできてしまう。
 type checkoutReq struct {
-	OrganizationID int64  `json:"organization_id"`
-	ActorEmail     string `json:"actor_email"`
+	ActorEmail string `json:"actor_email"`
 }
 
 // POST /v1/billing/checkout
@@ -77,13 +80,13 @@ func (s *Server) billingCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req checkoutReq
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil ||
-		req.OrganizationID <= 0 {
-		writeErr(w, http.StatusBadRequest, "organization_id を指定してください")
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "本文を読めません")
 		return
 	}
+	orgID, _ := orgFrom(r.Context())
 
-	b, err := s.St.LoadBilling(r.Context(), req.OrganizationID)
+	b, err := s.St.LoadBilling(r.Context(), orgID)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "その組織はありません")
 		return
@@ -92,20 +95,20 @@ func (s *Server) billingCheckout(w http.ResponseWriter, r *http.Request) {
 	cust, err := s.Stripe.EnsureCustomer(r.Context(), b.StripeCustomerID,
 		b.OrgName, req.ActorEmail, b.OrganizationID)
 	if err != nil {
-		s.Log.Error("顧客を用意できません", "org", req.OrganizationID, "err", err)
+		s.Log.Error("顧客を用意できません", "org", orgID, "err", err)
 		writeErr(w, http.StatusBadGateway, "決済サービスに繋がりません")
 		return
 	}
 	if b.StripeCustomerID == "" {
 		if err := s.St.SetStripeCustomer(r.Context(), b.OrganizationID, cust); err != nil {
-			s.Log.Error("顧客IDを保存できません", "org", req.OrganizationID, "err", err)
+			s.Log.Error("顧客IDを保存できません", "org", orgID, "err", err)
 		}
 	}
 
 	url, err := s.Stripe.CheckoutURL(r.Context(), cust, b.OrganizationID,
 		s.AppBaseURL+"/billing?done=1", s.AppBaseURL+"/billing?canceled=1")
 	if err != nil {
-		s.Log.Error("申し込み画面を作れません", "org", req.OrganizationID, "err", err)
+		s.Log.Error("申し込み画面を作れません", "org", orgID, "err", err)
 		writeErr(w, http.StatusBadGateway, "申し込み画面を開けませんでした")
 		return
 	}
@@ -118,20 +121,15 @@ func (s *Server) billingPortal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "決済の設定がされていません")
 		return
 	}
-	var req checkoutReq
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil ||
-		req.OrganizationID <= 0 {
-		writeErr(w, http.StatusBadRequest, "organization_id を指定してください")
-		return
-	}
-	b, err := s.St.LoadBilling(r.Context(), req.OrganizationID)
+	orgID, _ := orgFrom(r.Context())
+	b, err := s.St.LoadBilling(r.Context(), orgID)
 	if err != nil || b.StripeCustomerID == "" {
 		writeErr(w, http.StatusNotFound, "まだお申し込みがありません")
 		return
 	}
 	url, err := s.Stripe.PortalURL(r.Context(), b.StripeCustomerID, s.AppBaseURL+"/billing")
 	if err != nil {
-		s.Log.Error("管理画面を作れません", "org", req.OrganizationID, "err", err)
+		s.Log.Error("管理画面を作れません", "org", orgID, "err", err)
 		writeErr(w, http.StatusBadGateway, "管理画面を開けませんでした")
 		return
 	}

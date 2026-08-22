@@ -17,6 +17,7 @@ api/bin/
 # go build ./cmd/xxx が作る実行ファイル（cmd の名前と同じ）
 api/pipetest
 api/dmapi
+api/tenanttest
 api/dmseed
 api/dbtest
 api/ocrcompare

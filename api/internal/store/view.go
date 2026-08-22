@@ -221,10 +221,22 @@ func (s *Store) Approve(ctx context.Context, orgID, docID, actorID int64,
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// 【重要】組織を条件に入れる。orgID を監査ログにしか使わないと、
+	// 他事務所の伝票を承認できてしまい、しかも監査ログには
+	// 「承認した側の事務所」が残るので、記録を見ても気付けない。
+	// ForgetAlias が同じ形で JOIN しているのに、ここだけ抜けていた。
+	//
+	// ハンドラ側でも所有を確かめている（httpapi/auth.go の ownDocument）。
+	// 二重に見えるが、確認とデータ変更のあいだに割り込む余地を消すのと、
+	// この関数を別の口から呼んだときに素通りしないようにするため、両方置く。
 	var before []byte
 	err = tx.QueryRow(ctx, `
-		SELECT to_jsonb(m) FROM match_results m WHERE document_id = $1`,
-		docID).Scan(&before)
+		SELECT to_jsonb(m)
+		  FROM match_results m
+		  JOIN documents d ON d.id = m.document_id
+		  JOIN clients   c ON c.id = d.client_id
+		 WHERE m.document_id = $1 AND c.organization_id = $2`,
+		docID, orgID).Scan(&before)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}

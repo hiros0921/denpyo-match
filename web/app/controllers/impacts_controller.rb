@@ -14,7 +14,7 @@ class ImpactsController < ApplicationController
     # 起点の選択肢。実際に使われているものだけを出す。
     @thresholds = Threshold.where(organization_id: current_organization.id)
                            .order(id: :desc).limit(50)
-    @aliases = ApiClient.new.learned_aliases(organization_id: current_organization.id)
+    @aliases = api.learned_aliases
   rescue ApiClient::Unreachable
     @aliases = []
   end

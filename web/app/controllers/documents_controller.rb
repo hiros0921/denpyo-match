@@ -26,7 +26,7 @@ class DocumentsController < ApplicationController
       redirect_to new_document_path, alert: "ファイルを選んでください" and return
     end
 
-    res = ApiClient.new.upload(
+    res = api.upload(
       file: file,
       client_id: params[:client_id],
       doc_type: params[:doc_type].presence || 1,
@@ -67,9 +67,8 @@ class DocumentsController < ApplicationController
 
   def decide
     @document = find_document!(params[:id])
-    res = ApiClient.new.decide(
+    res = api.decide(
       document_id: @document.id,
-      organization_id: current_organization.id,
       actor_id: current_user.id,
       decision: params[:decision].to_i,
       partner_id: params[:partner_id].presence,

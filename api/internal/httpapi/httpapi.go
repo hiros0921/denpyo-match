@@ -8,9 +8,14 @@
 //	② 照会はワーカーに聞きに行かず、DBの jobs を読む。
 //	   ワーカーが何台でも、途中で落ちても、同じ1本の SQL で答えられる。
 //	③ 承認は必ず「誰が」を残す。人の判断を記録として残せない口は作らない。
+//	④ どの事務所からの要求かは、署名から決める。本文や問い合わせ文字列に
+//	   書かれた organization_id は読まない。詳しくは auth.go。
 //
-// 認証はここでは扱わない。第7段階の Rails（Devise）が前段に立ち、
-// 利用者IDを渡してくる。この API は事務所の内側からしか呼ばれない。
+// 【この方針は途中で変えた】
+// 当初は「認証はここでは扱わない。Rails が前段に立ち、この API は事務所の
+// 内側からしか呼ばれない」としていた。1事務所1台ならその通りだが、
+// 複数の事務所で1台を共有した瞬間に、伝票IDを順に叩くだけで
+// 全事務所の伝票が読める状態になる。前提が変わったので方針も変えた。
 package httpapi
 
 import (
@@ -61,6 +66,10 @@ type Server struct {
 	// 1ファイルの上限。既定 20MB。
 	// スキャン画像は大きくても数MBなので、これを超えるのは誤りか攻撃。
 	MaxUpload int64
+
+	// 呼び出し元の確認。nil のままでは Routes が起動を止める。
+	// 「設定し忘れたら認証なしで動く」を作らないため、既定値を持たせない。
+	Auth *Auth
 }
 
 func New(st *store.Store, norm *core.Runner, imageRoot string) *Server {
@@ -69,6 +78,15 @@ func New(st *store.Store, norm *core.Runner, imageRoot string) *Server {
 }
 
 func (s *Server) Routes() http.Handler {
+	// 【重要】ここで止める。認証なしで立ち上がる道を残さない。
+	//
+	// 設定漏れを警告で済ませると、警告は流れて、動いてしまう。
+	// 動いてしまえば誰も気付かない。気付くのは事故のあとになる。
+	if s.Auth == nil || (!s.Auth.Off && len(s.Auth.Secret) == 0) {
+		panic("httpapi: Auth が設定されていません。" +
+			"DM_API_SECRET を設定するか、開発時のみ DM_API_AUTH=off を指定してください")
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /v1/documents", s.upload)
@@ -83,7 +101,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/documents/{id}/settlement", s.confirmSettlement)
 	mux.HandleFunc("GET /v1/aliases", s.aliases)
 	mux.HandleFunc("DELETE /v1/aliases/{id}", s.forgetAlias)
-	return s.withLog(mux)
+
+	// 記録が先、確認が後。拒否した要求も記録に残したいので、
+	// withLog を外側に置く。逆にすると、拒否は記録に出ない。
+	return s.withLog(s.withAuth(s.Auth, mux))
 }
 
 // ── 応答の形 ──
@@ -141,6 +162,14 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "client_id を指定してください")
 		return
 	}
+
+	// 【重要】顧問先がこの事務所のものかを、契約の確認より先に見る。
+	// 順番が逆だと、他事務所の顧問先を指定したときに
+	// 「その事務所の契約状態」が 402 の文面から分かってしまう。
+	if s.denyOwn(w, s.ownClient(r, clientID)) {
+		return
+	}
+
 	docType := int16(1)
 	if v := r.FormValue("doc_type"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -319,6 +348,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "伝票IDが正しくありません")
 		return
 	}
+	// 【重要】この確認が無いと、伝票IDを1から順に叩くだけで
+	// 全事務所の伝票が読める。認証を入れる前は、実際にそうなっていた。
+	if s.denyOwn(w, s.ownDocument(r, id)) {
+		return
+	}
+
 	n := 5
 	if v := r.URL.Query().Get("candidates"); v != "" {
 		if k, err := strconv.Atoi(v); err == nil && k >= 0 && k <= 50 {
@@ -363,10 +398,15 @@ func (s *Server) decision(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "本文を読めません")
 		return
 	}
-	switch {
-	case req.OrgID <= 0:
-		writeErr(w, http.StatusBadRequest, "organization_id を指定してください")
+
+	// 事務所は署名から取る。本文の organization_id は読まない。
+	// 読める形を残すと、いつか読む人が出る。
+	orgID, _ := orgFrom(r.Context())
+	if s.denyOwn(w, s.ownDocument(r, id)) {
 		return
+	}
+
+	switch {
 	case req.ActorID <= 0:
 		// 誰が承認したか分からない記録を残さない。
 		// 監査ログの意味が無くなる。
@@ -377,6 +417,13 @@ func (s *Server) decision(w http.ResponseWriter, r *http.Request) {
 		return
 	case req.Decision == 3 && req.PartnerID == nil:
 		writeErr(w, http.StatusBadRequest, "修正のときは partner_id が必要です")
+		return
+	}
+
+	// 操作者もこの事務所の職員でなければならない。
+	// 監査ログに他事務所の職員IDが残ると、「誰が承認したか」を
+	// 後から示すという土台そのものが崩れる。
+	if s.denyOwn(w, s.ownActor(r, req.ActorID)) {
 		return
 	}
 
@@ -399,7 +446,7 @@ func (s *Server) decision(w http.ResponseWriter, r *http.Request) {
 		aliasNorm = ns[0]
 	}
 
-	err = s.St.Approve(r.Context(), req.OrgID, id, req.ActorID,
+	err = s.St.Approve(r.Context(), orgID, id, req.ActorID,
 		req.Decision, req.PartnerID, req.LearnAlias, aliasNorm)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "その伝票には照合結果がありません")
@@ -421,13 +468,11 @@ func (s *Server) decision(w http.ResponseWriter, r *http.Request) {
 // 第7段階の検証で実際にそうなった。押し間違いは現場で必ず起きるので、
 // 「覚えっぱなしで直せない」状態にはしない。
 
-// GET /v1/aliases?organization_id=1&limit=100
+// GET /v1/aliases?limit=100
+//
+// 事務所は署名から決まる。問い合わせ文字列では受け取らない。
 func (s *Server) aliases(w http.ResponseWriter, r *http.Request) {
-	orgID, err := strconv.ParseInt(r.URL.Query().Get("organization_id"), 10, 64)
-	if err != nil || orgID <= 0 {
-		writeErr(w, http.StatusBadRequest, "organization_id を指定してください")
-		return
-	}
+	orgID, _ := orgFrom(r.Context())
 	limit := 100
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
@@ -443,18 +488,24 @@ func (s *Server) aliases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"aliases": list})
 }
 
-// DELETE /v1/aliases/{id}?organization_id=1&actor_id=1
+// DELETE /v1/aliases/{id}?actor_id=1
+//
+// 事務所は署名から決まる。ForgetAlias 自身も組織を条件に持つので、
+// 他事務所の表記は、ここを抜けても消せない。
 func (s *Server) forgetAlias(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		writeErr(w, http.StatusBadRequest, "IDが正しくありません")
 		return
 	}
-	orgID, _ := strconv.ParseInt(r.URL.Query().Get("organization_id"), 10, 64)
+	orgID, _ := orgFrom(r.Context())
 	actorID, _ := strconv.ParseInt(r.URL.Query().Get("actor_id"), 10, 64)
-	if orgID <= 0 || actorID <= 0 {
+	if actorID <= 0 {
 		// 誰が取り消したか分からない記録を残さない。
-		writeErr(w, http.StatusBadRequest, "organization_id と actor_id を指定してください")
+		writeErr(w, http.StatusBadRequest, "actor_id を指定してください")
+		return
+	}
+	if s.denyOwn(w, s.ownActor(r, actorID)) {
 		return
 	}
 	err = s.St.ForgetAlias(r.Context(), orgID, id, actorID)

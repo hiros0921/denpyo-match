@@ -27,7 +27,7 @@ class SettlementsController < ApplicationController
     if file.blank?
       redirect_to settlements_path, alert: "ファイルを選んでください" and return
     end
-    res = ApiClient.new.import_transactions(
+    res = api.import_transactions(
       file: file,
       client_id: params[:client_id],
       source_type: params[:source_type]
@@ -49,7 +49,7 @@ class SettlementsController < ApplicationController
 
   # 突合だけを再実行する。別名を覚えた後や、閾値を変えた後に使う。
   def run
-    res = ApiClient.new.run_settlements(client_id: params[:client_id])
+    res = api.run_settlements(client_id: params[:client_id])
     if res[:ok]
       s = res[:stats]
       redirect_to settlements_path(client_id: params[:client_id]),
@@ -65,9 +65,8 @@ class SettlementsController < ApplicationController
   # 人の確定。この伝票は以後、自動突合が上書きしない。
   def confirm
     document = find_document!(params[:id])
-    res = ApiClient.new.confirm_settlement(
+    res = api.confirm_settlement(
       document_id: document.id,
-      organization_id: current_organization.id,
       actor_id: current_user.id,
       transaction_id: params[:transaction_id].presence,
       none: params[:none].present?,

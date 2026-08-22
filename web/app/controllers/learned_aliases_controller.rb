@@ -8,17 +8,14 @@
 # 押し間違いは現場で必ず起きるので、見て取り消せるようにしておく。
 class LearnedAliasesController < ApplicationController
   def index
-    @aliases = ApiClient.new.learned_aliases(organization_id: current_organization.id)
+    @aliases = api.learned_aliases
   rescue ApiClient::Unreachable => e
     @aliases = []
     flash.now[:alert] = "処理サーバーに繋がりません（#{e.message}）"
   end
 
   def destroy
-    res = ApiClient.new.forget_alias(
-      id: params[:id], organization_id: current_organization.id,
-      actor_id: current_user.id
-    )
+    res = api.forget_alias(id: params[:id], actor_id: current_user.id)
     if res[:ok]
       # 「無かったことにする」のではなく「取り消した」を記録している。
       # partner_aliases の行は消えるが、覚えた事実と取り消した事実は監査ログに残る。

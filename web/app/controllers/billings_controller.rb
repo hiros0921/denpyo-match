@@ -13,9 +13,7 @@ class BillingsController < ApplicationController
   def checkout
     return deny unless current_user.can_manage_billing?
 
-    res = ApiClient.new.checkout_url(
-      organization_id: current_organization.id, actor_email: current_user.email
-    )
+    res = api.checkout_url(actor_email: current_user.email)
     if res[:ok]
       # Stripe の画面へ送る。カード番号はこちらを通らない。
       redirect_to res[:url], allow_other_host: true
@@ -29,7 +27,7 @@ class BillingsController < ApplicationController
   def portal
     return deny unless current_user.can_manage_billing?
 
-    res = ApiClient.new.portal_url(organization_id: current_organization.id)
+    res = api.portal_url
     if res[:ok]
       redirect_to res[:url], allow_other_host: true
     else

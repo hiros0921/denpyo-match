@@ -90,6 +90,10 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-dm}:${POSTGRES_PASSWORD:-dm_dev_only}@postgres:5432/denpo_match?sslmode=disable
       S3_ENDPOINT: http://minio:9000
+      # 画面との共有鍵。web 側と同じ値でなければ全ての呼び出しが401になる。
+      # 既定値を置かない。置くと、その既定値のまま本番に出る道ができる。
+      DM_API_SECRET: ${DM_API_SECRET}
+      DM_API_AUTH: ${DM_API_AUTH:-}
     ports:
       - "${API_PORT:-58080}:8080"
     volumes:
@@ -127,6 +131,9 @@ services:
       # 手元で直しながら動かすときは、.env に次を書いて上書きする。
       #   API_BASE=http://host.docker.internal:58080
       API_BASE: ${API_BASE:-http://api:8080}
+      # api と同じ値。ここがずれると画面から API を1本も呼べなくなる。
+      DM_API_SECRET: ${DM_API_SECRET}
+      DM_API_AUTH: ${DM_API_AUTH:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

@@ -1,6 +1,8 @@
 require "net/http"
 require "json"
 require "securerandom"
+require "openssl"
+require "digest"
 
 # Go の API を呼ぶ。
 #
@@ -15,11 +17,24 @@ require "securerandom"
 #   読み取り（一覧・集計）は Rails から直接DBを引く。
 #   こちらは書き込みが無いので二重実装の問題が起きず、
 #   API を経由すると集計のたびに往復が増えるだけになる。
+#
+# ── 事務所IDの扱い ──
+#
+# organization_id は各メソッドの引数ではなく、この物を作るときに渡す。
+#
+# 【重要】引数にしてはいけない。
+# 引数だと、呼ぶ側が current_organization 以外の値を渡せてしまう。
+# 11か所ある呼び出しのうち1か所で間違えれば、他事務所のデータに手が届く。
+# 「間違えないように気をつける」ではなく「間違った値を渡す場所が無い」形にする。
+# 画面側は ApplicationController#api を使い、直接 new しない。
 class ApiClient
   class Unreachable < StandardError; end
+  class Unconfigured < StandardError; end
 
-  def initialize(base: ENV.fetch("API_BASE", "http://localhost:58080"))
+  def initialize(organization_id:, base: ENV.fetch("API_BASE", "http://localhost:58080"))
+    raise ArgumentError, "organization_id が要ります" if organization_id.to_i <= 0
     @base = base
+    @org  = organization_id.to_i
   end
 
   def upload(file:, client_id:, doc_type:, direction: nil)
@@ -69,13 +84,13 @@ class ApiClient
                       : { ok: false, error: error_message(res) }
   end
 
-  def confirm_settlement(document_id:, organization_id:, actor_id:,
+  def confirm_settlement(document_id:, actor_id:,
                          transaction_id: nil, none: false, learn_alias: nil)
     uri = URI.join(@base, "/v1/documents/#{document_id}/settlement")
     req = Net::HTTP::Post.new(uri)
     req["Content-Type"] = "application/json"
     req.body = {
-      organization_id: organization_id, actor_id: actor_id,
+      actor_id: actor_id,
       transaction_id: transaction_id&.to_i,
       none: none.presence && true,
       learn_alias: learn_alias
@@ -89,13 +104,13 @@ class ApiClient
     end
   end
 
-  def decide(document_id:, organization_id:, actor_id:, decision:,
+  def decide(document_id:, actor_id:, decision:,
              partner_id: nil, learn_alias: nil)
     uri = URI.join(@base, "/v1/documents/#{document_id}/decision")
     req = Net::HTTP::Post.new(uri)
     req["Content-Type"] = "application/json"
     req.body = {
-      organization_id: organization_id, actor_id: actor_id,
+      actor_id: actor_id,
       decision: decision,
       partner_id: partner_id&.to_i,
       learn_alias: learn_alias
@@ -108,16 +123,15 @@ class ApiClient
   # 覚えた表記の一覧。読み取りだが API 経由にする。
   # 取り消しが API 側にある以上、一覧も同じ口から見えたほうが、
   # 「画面に出ているものが消せる」対応が崩れない。
-  def learned_aliases(organization_id:, limit: 100)
-    uri = URI.join(@base, "/v1/aliases?organization_id=#{organization_id}&limit=#{limit}")
+  def learned_aliases(limit: 100)
+    uri = URI.join(@base, "/v1/aliases?limit=#{limit}")
     res = perform(uri, Net::HTTP::Get.new(uri), timeout: 15)
     return [] unless res.code == "200"
     JSON.parse(res.body)["aliases"] || []
   end
 
-  def forget_alias(id:, organization_id:, actor_id:)
-    uri = URI.join(@base,
-                   "/v1/aliases/#{id}?organization_id=#{organization_id}&actor_id=#{actor_id}")
+  def forget_alias(id:, actor_id:)
+    uri = URI.join(@base, "/v1/aliases/#{id}?actor_id=#{actor_id}")
     res = perform(uri, Net::HTTP::Delete.new(uri), timeout: 15)
     res.code == "200" ? { ok: true } : { ok: false, error: error_message(res) }
   end
@@ -128,8 +142,8 @@ class ApiClient
   # 「支払っているのに使えない」も「解約したのに使える」も事故になるので、
   # 判定は Go の billing.Evaluate 1箇所だけにする。
   # 2箇所に書くと、片方だけ直したときに画面と実際の動きが食い違う。
-  def billing_status(organization_id:)
-    uri = URI.join(@base, "/v1/billing?organization_id=#{organization_id}")
+  def billing_status
+    uri = URI.join(@base, "/v1/billing")
     res = perform(uri, Net::HTTP::Get.new(uri), timeout: 10)
     return nil unless res.code == "200"
     JSON.parse(res.body)
@@ -137,14 +151,17 @@ class ApiClient
 
   # 申し込み画面のURLを作る。カード番号は Stripe の画面で入力してもらう。
   # 自前で受けると、その瞬間からカード情報を扱う側になる。
-  def checkout_url(organization_id:, actor_email:)
-    post_json("/v1/billing/checkout",
-              organization_id: organization_id, actor_email: actor_email)
+  def checkout_url(actor_email:)
+    post_json("/v1/billing/checkout", actor_email: actor_email)
   end
 
   # 支払い方法の変更・解約を行う画面のURL。
-  def portal_url(organization_id:)
-    post_json("/v1/billing/portal", organization_id: organization_id)
+  #
+  # 【重要】この口は Stripe の管理画面へ入れてしまう。
+  # 事務所IDを引数で受けていた頃は、番号を差し替えれば
+  # 他事務所の解約もカード情報の閲覧もできた。署名から決める。
+  def portal_url
+    post_json("/v1/billing/portal")
   end
 
   private
@@ -160,11 +177,54 @@ class ApiClient
   end
 
   def perform(uri, req, timeout:)
+    sign(uri, req)
     Net::HTTP.start(uri.host, uri.port, open_timeout: 5, read_timeout: timeout) do |http|
       http.request(req)
     end
   rescue Errno::ECONNREFUSED, Net::OpenTimeout, SocketError => e
     raise Unreachable, e.message
+  end
+
+  # 要求に署名を付ける。
+  #
+  # ここが唯一の出口なので、1か所で全部の呼び出しに掛かる。
+  # メソッドごとに付けて回ると、新しいメソッドを足したときに付け忘れる。
+  # 付け忘れは 401 で必ず落ちるので静かには壊れないが、
+  # そもそも忘れられない場所に置く。
+  #
+  # 署名する文字列は Go 側と1文字も違ってはいけない。
+  # 対応は api/internal/httpapi/auth.go の sign。
+  def sign(uri, req)
+    ts = Time.now.to_i
+    req["X-DM-Org"] = @org.to_s
+    req["X-DM-Timestamp"] = ts.to_s
+    return if secret.nil? # DM_API_AUTH=off の開発時。事務所IDだけ送る
+
+    req["X-DM-Signature"] = ApiSignature.header(
+      secret: secret,
+      method: req.method,
+      path: uri.path,
+      query: uri.query,
+      timestamp: ts,
+      organization_id: @org,
+      body: req.body
+    )
+  end
+
+  # 共有鍵。無い状態を黙って通さない。
+  #
+  # 【重要】鍵が無いときに署名なしで送って 401 を見せる、にしない。
+  # 401 は「鍵が違う」とも「Go 側の設定漏れ」とも読めるので、
+  # 原因を探す場所が2つに増える。こちら側の設定漏れは、こちらで言い切る。
+  def secret
+    return @secret if defined?(@secret)
+    s = ENV["DM_API_SECRET"].presence
+    if s.nil? && ENV["DM_API_AUTH"] != "off"
+      raise Unconfigured,
+            "DM_API_SECRET が設定されていません。API を呼べません" \
+            "（開発で外す場合のみ DM_API_AUTH=off）"
+    end
+    @secret = s
   end
 
   # API はエラーを日本語で返す。そのまま画面に出す。

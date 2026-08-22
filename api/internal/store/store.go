@@ -489,3 +489,33 @@ func (s *Store) OrgIDForClient(ctx context.Context, clientID int64) (int64, erro
 	}
 	return id, err
 }
+
+// OrgIDForDocument は伝票から組織を引く。
+//
+// documents は顧問先しか持たないので、clients を1回挟む。
+// 伝票の照会・承認のたびに呼ばれるが、どちらも主キーの等値なので
+// 追加の索引は要らない（documents.id と clients.id）。
+func (s *Store) OrgIDForDocument(ctx context.Context, docID int64) (int64, error) {
+	var id int64
+	err := s.Pool.QueryRow(ctx, `
+		SELECT c.organization_id
+		  FROM documents d
+		  JOIN clients   c ON c.id = d.client_id
+		 WHERE d.id = $1`, docID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
+}
+
+// OrgIDForUser は職員から組織を引く。
+// 監査ログに残す操作者が、本当にその事務所の人かを確かめるために使う。
+func (s *Store) OrgIDForUser(ctx context.Context, userID int64) (int64, error) {
+	var id int64
+	err := s.Pool.QueryRow(ctx,
+		`SELECT organization_id FROM users WHERE id = $1`, userID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
+}
